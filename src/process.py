@@ -76,29 +76,49 @@ class TrainingProcessManager:
         # This ensures Python's working directory is where 'library' module exists
         
         script_dir = cwd  # Default fallback
+        script_name = None
         
-        # 1. Try to find sd-scripts directory from cmd_list or common paths
-        # First, check if any argument is a full path ending with .py
+        # 1. Try to find sd-scripts directory more reliably
+        # First, extract script name and check if full path is provided
         for arg in cmd_list:
-            if isinstance(arg, str) and arg.endswith(".py") and os.path.exists(arg):
-                # Found full path to script! Use its directory
-                script_dir = os.path.dirname(os.path.abspath(arg))
-                break
-        else:
-            # Script name is relative (just "flux_train_network.py")
-            # Try to find sd-scripts in common locations
+            if isinstance(arg, str) and arg.endswith(".py"):
+                script_name = os.path.basename(arg)
+                
+                # If full path provided and exists, use its directory
+                if os.path.exists(arg):
+                    script_dir = os.path.dirname(os.path.abspath(arg))
+                    break
+        
+        if script_name and script_dir == cwd:
+            # Script name is relative - search for sd-scripts location
             possible_paths = [
                 cwd,  # Assume cwd is sd-scripts
                 os.path.join(cwd, "sd-scripts"),  # Or in a subdirectory
+                os.path.join(cwd, "kohya_ss", "sd-scripts"),  # Alternative structure
                 os.path.join(cwd, "kohya_train", "kohya_ss", "sd-scripts"),  # Common ComfyUI layout
-                os.path.join(cwd, "custom_nodes", "ComfyUI-Flux2-LoRA-Manager", "sd-scripts"),  # Alternative
+                os.path.join(cwd, "custom_nodes", "sd-scripts"),  # In custom_nodes
+                os.path.join(cwd, "..", "sd-scripts"),  # One level up
             ]
             
             for possible_path in possible_paths:
-                if os.path.exists(os.path.join(possible_path, "library")):
-                    # Found it! This directory has 'library' folder
-                    script_dir = possible_path
+                candidate = os.path.join(possible_path, script_name)
+                if os.path.exists(candidate):
+                    script_dir = os.path.abspath(possible_path)
+                    # Update cmd_list with full path to ensure it's found
+                    for i, arg in enumerate(cmd_list):
+                        if arg.endswith(".py") and not os.path.isabs(arg):
+                            cmd_list[i] = candidate
                     break
+            else:
+                # Last resort: check for 'library' folder in possible paths
+                for possible_path in possible_paths:
+                    if os.path.exists(os.path.join(possible_path, "library")):
+                        script_dir = os.path.abspath(possible_path)
+                        # Update cmd_list with full path
+                        for i, arg in enumerate(cmd_list):
+                            if arg.endswith(".py"):
+                                cmd_list[i] = os.path.join(script_dir, script_name)
+                        break
         
         # 2. Set up PYTHONPATH as fallback (belt and suspenders approach)
         current_pythonpath = env.get("PYTHONPATH", "")
@@ -124,6 +144,38 @@ class TrainingProcessManager:
                 except Exception:
                     pass
         # ========================================================================
+        
+        # CRITICAL: Verify script exists before attempting to run
+        script_to_run = None
+        for arg in cmd_list:
+            if isinstance(arg, str) and arg.endswith(".py"):
+                script_to_run = arg
+                break
+        
+        if script_to_run:
+            # If relative path, try to resolve it
+            if not os.path.isabs(script_to_run):
+                script_to_run = os.path.join(script_dir, script_to_run)
+            
+            if not os.path.exists(script_to_run):
+                error_msg = f"CRITICAL ERROR: Training script not found: {script_to_run}"
+                print(f"[FLUX-TRAIN] {error_msg}")
+                print(f"[FLUX-TRAIN] Search paths tried:")
+                for p in [cwd, script_dir]:
+                    print(f"  - {p}")
+                
+                if PromptServer:
+                    try:
+                        PromptServer.instance.send_sync("flux_train_log", {"line": error_msg})
+                        PromptServer.instance.send_sync("flux_train_log", {"line": f"Expected at: {script_to_run}"})
+                        PromptServer.instance.send_sync("flux_train_log", {"line": "Possible fixes:"})
+                        PromptServer.instance.send_sync("flux_train_log", {"line": "1. Download sd-scripts from: https://github.com/kohya-ss/sd-scripts"})
+                        PromptServer.instance.send_sync("flux_train_log", {"line": f"2. Place in: {os.path.join(cwd, 'sd-scripts')}"})
+                        PromptServer.instance.send_sync("flux_train_log", {"line": "3. OR update sd-scripts path in configurator node"})
+                    except Exception:
+                        pass
+                
+                raise FileNotFoundError(f"Training script not found: {script_to_run}")
 
         # Windows-specific: Create new console group to allow clean termination
         creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
@@ -322,27 +374,46 @@ class Flux2_Runner:
                 cmd_list = json.loads(cmd_args)
                 if not isinstance(cmd_list, list):
                     raise ValueError("JSON is not a list")
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError) as e:
                 # Fallback: Parse as string for backward compatibility
-                print("[FLUX-TRAIN] Warning: Using legacy string parsing (may fail on Windows paths)")
+                print(f"[FLUX-TRAIN] Warning: Using legacy string parsing (may fail on Windows paths): {e}")
                 cmd_list = shlex.split(cmd_args)
 
             if not cmd_list or not isinstance(cmd_list, list):
                 return ("❌ Error: Invalid command format",)
 
-            # Infer working directory from script path
-            # Script path should be in cmd_list (usually the 5th argument after python, -u, -m, accelerate, ...)
+            # Infer working directory from script path or common locations
             cwd = os.getcwd()
             for arg in cmd_list:
-                if isinstance(arg, str) and arg.endswith(".py") and os.path.exists(arg):
-                    cwd = os.path.dirname(arg) or os.getcwd()
+                if isinstance(arg, str) and arg.endswith(".py"):
+                    if os.path.exists(arg):
+                        cwd = os.path.dirname(os.path.abspath(arg)) or os.getcwd()
+                    else:
+                        # Try to find sd-scripts directory
+                        for search_path in [
+                            os.getcwd(),
+                            os.path.join(os.getcwd(), "sd-scripts"),
+                            os.path.join(os.getcwd(), "kohya_ss", "sd-scripts"),
+                            os.path.join(os.getcwd(), "kohya_train", "kohya_ss", "sd-scripts"),
+                            os.path.join(os.getcwd(), "..", "sd-scripts"),
+                        ]:
+                            if os.path.exists(os.path.join(search_path, arg)):
+                                cwd = search_path
+                                break
                     break
 
             manager.start_training(cmd_list, cwd=cwd)
             return ("✅ Training Started! Monitor console for progress.",)
 
+        except FileNotFoundError as e:
+            error_msg = f"❌ File Error: {str(e)}\nCheck console for details."
+            print(f"[FLUX-TRAIN] {error_msg}")
+            return (error_msg,)
         except Exception as e:
-            return (f"❌ Error: {str(e)}",)
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"[FLUX-TRAIN] Full error:\n{error_detail}")
+            return (f"❌ Error: {str(e)}\nCheck console for traceback.",)
 
 
 class Flux2_Stopper:
