@@ -56,8 +56,18 @@ def main():
             return 1
     
     # Install packages
-    print("Installing training packages...")
-    print("This will take 5-10 minutes (downloading ~2GB)...")
+    print("Installing complete training environment...")
+    print("This includes ALL dependencies (tokenizers, huggingface_hub, etc.)")
+    print("First run: 5-10 minutes | ~500MB download")
+    print()
+    
+    # Show what will be installed
+    package_count = sum(1 for v in manager.TRAINING_REQUIREMENTS.values() if v != 'SKIP')
+    print(f"Will install {package_count} packages:")
+    for pkg, ver in list(manager.TRAINING_REQUIREMENTS.items())[:10]:
+        if ver != 'SKIP':
+            print(f"  • {pkg}: {ver}")
+    print("  ...")
     print()
     
     success, msg = manager.setup_training_packages(force_reinstall=args.force)

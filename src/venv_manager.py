@@ -20,22 +20,38 @@ class StandalonePackageManager:
     Compatible with embedded Python.
     """
     
-    # Compatible versions for sd-scripts
+    # Complete dependency tree for sd-scripts training
     # IMPORTANT: We use system PyTorch (already in ComfyUI) to avoid:
     # - 15+ minute download times
     # - 2-3GB disk space duplication  
     # - Version conflict complexity with torchvision
     TRAINING_REQUIREMENTS = {
-        'torch': 'SKIP',  # Use system PyTorch from ComfyUI
-        'torchvision': 'SKIP',  # Use system torchvision from ComfyUI
-        'transformers': '4.36.2',  # This needs isolation (GenerationMixin issue)
+        # Core ML libraries (use system versions)
+        'torch': 'SKIP',
+        'torchvision': 'SKIP',
+        
+        # Training framework packages (MUST be isolated - critical versions)
+        'transformers': '4.36.2',  # Specific GenerationMixin API version
+        'tokenizers': '0.15.2',  # Must match transformers 4.36.2
         'diffusers': '0.25.1',
         'accelerate': '0.25.0',
         'safetensors': '0.4.2',
+        'huggingface_hub': '0.20.3',  # Has cached_download, compatible with transformers
+        
+        # Utilities and dependencies
         'toml': '0.10.2',
         'omegaconf': '2.3.0',
         'einops': '0.7.0',
         'peft': '0.7.1',
+        
+        # Additional transitive dependencies (prevent system version issues)
+        'regex': 'latest',  # tokenizers dependency
+        'requests': 'latest',  # huggingface_hub dependency
+        'tqdm': 'latest',  # progress bars
+        'pyyaml': 'latest',  # config files
+        'filelock': 'latest',  # huggingface_hub dependency
+        'fsspec': 'latest',  # file system abstraction
+        'packaging': 'latest',  # version parsing
     }
     
     def __init__(self, base_dir: Optional[str] = None):
@@ -269,29 +285,37 @@ class StandalonePackageManager:
         return self.install_packages(progress_callback=progress_callback)
     
     def verify_installation(self) -> Tuple[bool, List[str]]:
-        """Verify packages are installed and importable."""
+        """Verify critical packages can be imported from training_libs."""
         if not self.libs_dir.exists():
-            return False, ["Package directory does not exist"]
+            return False, ["training_libs directory does not exist"]
         
         python_exe = self._get_python_exe()
         messages = []
         all_ok = True
         
-        # Get modified environment
-        env = self.get_modified_env()
+        # Critical packages to test
+        critical_packages = [
+            'transformers',
+            'tokenizers', 
+            'diffusers',
+            'accelerate',
+            'huggingface_hub',
+            'safetensors',
+        ]
         
-        # Test critical packages (only the ones we installed)
-        test_packages = ['transformers', 'diffusers', 'accelerate']
-        
-        for package in test_packages:
+        for package in critical_packages:
+            # Test import with training_libs prioritized
             test_code = f"""
 import sys
 sys.path.insert(0, r'{self.libs_dir}')
+
 try:
     import {package}
-    print(f'{package}:' + {package}.__version__)
+    version = getattr({package}, '__version__', 'unknown')
+    location = {package}.__file__
+    print(f'{package}:{{version}}:{{location}}')
 except Exception as e:
-    print(f'{package}:ERROR:' + str(e))
+    print(f'{package}:ERROR:{{str(e)}}')
 """
             
             try:
@@ -299,36 +323,54 @@ except Exception as e:
                     [python_exe, "-c", test_code],
                     capture_output=True,
                     text=True,
-                    timeout=10,
-                    env=env
+                    timeout=15
                 )
                 
                 output = result.stdout.strip()
                 
                 if 'ERROR' in output:
-                    messages.append(f"✗ {output}")
+                    parts = output.split(':', 2)
+                    error_detail = parts[2] if len(parts) > 2 else "Unknown error"
+                    messages.append(f"✗ {package}: {error_detail[:100]}")
                     all_ok = False
                 elif output:
-                    messages.append(f"✓ {output}")
+                    parts = output.split(':', 2)
+                    pkg_name = parts[0]
+                    version = parts[1] if len(parts) > 1 else "?"
+                    location = parts[2] if len(parts) > 2 else "?"
+                    
+                    # Check if loaded from training_libs
+                    if 'training_libs' in location:
+                        messages.append(f"✓ {pkg_name}: {version} (isolated)")
+                    else:
+                        messages.append(f"⚠ {pkg_name}: {version} (system - not isolated!)")
+                        # This is OK for now but not ideal
                 else:
-                    messages.append(f"✗ {package}: no output")
+                    messages.append(f"✗ {package}: No output")
                     all_ok = False
                     
+            except subprocess.TimeoutExpired:
+                messages.append(f"✗ {package}: Verification timeout")
+                all_ok = False
             except Exception as e:
-                messages.append(f"✗ {package}: {e}")
+                messages.append(f"✗ {package}: {str(e)}")
                 all_ok = False
         
-        # Check system torch (should already be available)
+        # Check system torch
         try:
             result = subprocess.run(
-                [python_exe, "-c", "import torch; print(f'torch:{torch.__version__} (system)')"],
+                [python_exe, "-c", "import torch; print(f'torch:{{torch.__version__}}')"],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
-            messages.append(f"✓ {result.stdout.strip()}")
+            if result.returncode == 0:
+                messages.append(f"✓ {result.stdout.strip()} (system)")
+            else:
+                messages.append("✗ torch: Not available in system")
+                all_ok = False
         except Exception:
-            messages.append("✗ torch: not available (should come from ComfyUI system)")
+            messages.append("✗ torch: Import test failed")
             all_ok = False
         
         return all_ok, messages
