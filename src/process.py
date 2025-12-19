@@ -70,6 +70,26 @@ class TrainingProcessManager:
         env["ACCELERATE_MIXED_PRECISION"] = "bf16"
         env["PYTHONIOENCODING"] = "utf-8"  # CRITICAL for Windows console output
 
+        # === FIX: Add sd-scripts to PYTHONPATH for 'library' module discovery ===
+        # When flux_train_network.py runs, it needs to import library.device_utils
+        # Python won't find this automatically if we run from outside sd-scripts dir
+        script_dir = cwd  # Default to provided CWD
+        
+        # Search for the training script in cmd_list to find sd-scripts path
+        for arg in cmd_list:
+            if isinstance(arg, str) and arg.endswith(".py") and os.path.exists(arg):
+                # Found the script! Use its directory
+                script_dir = os.path.dirname(os.path.abspath(arg))
+                break
+        
+        # Add script directory to PYTHONPATH so Python finds 'library' module
+        current_pythonpath = env.get("PYTHONPATH", "")
+        if current_pythonpath:
+            env["PYTHONPATH"] = f"{script_dir}{os.pathsep}{current_pythonpath}"
+        else:
+            env["PYTHONPATH"] = script_dir
+        # ========================================================================
+
         # Windows-specific: Create new console group to allow clean termination
         creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
 
@@ -77,7 +97,7 @@ class TrainingProcessManager:
             # Launch subprocess with isolated I/O
             self.process = subprocess.Popen(
                 cmd_list,
-                cwd=cwd,
+                cwd=script_dir,  # Run from script directory for module imports
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -93,6 +113,8 @@ class TrainingProcessManager:
             if PromptServer:
                 try:
                     PromptServer.instance.send_sync("flux_train_log", {"line": startup_msg})
+                    PromptServer.instance.send_sync("flux_train_log", {"line": f"Working Dir: {script_dir}"})
+                    PromptServer.instance.send_sync("flux_train_log", {"line": f"PYTHONPATH: {env.get('PYTHONPATH', 'not set')}"})
                     PromptServer.instance.send_sync("flux_train_log", {"line": f"Command: {' '.join(cmd_list)}"})
                 except Exception as e:
                     print(f"[FLUX-TRAIN] Warning: Could not send startup message: {e}")
