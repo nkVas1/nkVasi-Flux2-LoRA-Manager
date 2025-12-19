@@ -137,8 +137,15 @@ class Flux2_8GB_Configurator:
             )
 
         # 3. Build command arguments optimized for RTX 3060 Ti (8GB)
+        # Get absolute path to current Python interpreter (critical for Windows)
+        import sys
+        python_exe = sys.executable
+
+        # IMPORTANT: On Windows, calling accelerate as a module is more reliable
+        # than calling it as a command-line tool directly
         cmd = [
-            "accelerate", "launch",
+            python_exe,
+            "-m", "accelerate.commands.launch",  # Run accelerate as module
             "--mixed_precision=bf16",
             "--num_cpu_threads_per_process=2",
             script_path,
@@ -149,8 +156,8 @@ class Flux2_8GB_Configurator:
             "--max_train_steps", str(max_train_steps),
             "--learning_rate", str(learning_rate),
             "--gradient_accumulation_steps", "1",
-            "--network_dim", lora_rank,
-            "--network_alpha", lora_rank,
+            "--network_dim", str(lora_rank),  # Ensure string type
+            "--network_alpha", str(lora_rank),
 
             # --- VRAM SAVING STRATEGY ---
             "--mixed_precision", "bf16",

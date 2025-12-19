@@ -83,36 +83,55 @@ class TrainingProcessManager:
 
     def _log_reader(self) -> None:
         """
-        Reads stdout from subprocess and forwards to ComfyUI console.
+        Reads stdout from subprocess and forwards to ComfyUI WebSocket.
+        Sends logs to browser interface in real-time.
         Runs in separate thread to avoid blocking.
         """
         try:
-            while self.process and self.process.poll() is None:
-                if self.process.stdout:
-                    line = self.process.stdout.readline()
-                    if line:
-                        clean_line = line.strip()
-                        self.log_lines.append(clean_line)
+            while True:
+                # Read one line from stdout (blocking operation in thread)
+                line = self.process.stdout.readline()
 
-                        # Limit in-memory log size
-                        if len(self.log_lines) > 500:
-                            self.log_lines = self.log_lines[-300:]
+                # If line is empty and process finished, exit
+                if not line and self.process.poll() is not None:
+                    break
 
-                        # Print to console (visible to user)
-                        print(f"[FLUX-TRAIN] {clean_line}")
+                if line:
+                    clean_line = line.strip()
+                    self.log_lines.append(clean_line)
 
-                        # Optional: Send to PromptServer if available
-                        if PromptServer:
-                            try:
-                                PromptServer.instance.send_sync(
-                                    "flux.training.log",
-                                    {"message": clean_line, "timestamp": time.time()}
-                                )
-                            except Exception:
-                                pass  # Silently fail if server not available
+                    # Limit in-memory log size
+                    if len(self.log_lines) > 500:
+                        self.log_lines = self.log_lines[-300:]
+
+                    # 1. Print to server console (for debugging)
+                    print(f"[FLUX-TRAIN] {clean_line}")
+
+                    # 2. Send to browser via WebSocket
+                    # 'flux_train_log' is the event name caught by JS extension
+                    if PromptServer:
+                        try:
+                            PromptServer.instance.send_sync(
+                                "flux_train_log",
+                                {"line": clean_line, "timestamp": time.time()}
+                            )
+                        except Exception as e:
+                            # Silently fail if server not available
+                            print(f"[FLUX-TRAIN] WebSocket send error: {e}")
+
                 time.sleep(0.01)  # Small sleep to prevent busy-waiting
+
         except Exception as e:
-            print(f"[FLUX-TRAIN] Error in log reader: {e}")
+            error_msg = f"[FLUX-TRAIN] Error in log reader: {e}"
+            print(error_msg)
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync(
+                        "flux_train_log",
+                        {"line": error_msg}
+                    )
+                except Exception:
+                    pass
 
     def stop_training(self) -> None:
         """Gracefully stop training process."""
