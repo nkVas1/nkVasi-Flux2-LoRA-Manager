@@ -20,11 +20,15 @@ class StandalonePackageManager:
     Compatible with embedded Python.
     """
     
-    # Exact versions that work with sd-scripts (PyTorch 2.5.1 latest stable)
+    # Compatible versions for sd-scripts
+    # IMPORTANT: We use system PyTorch (already in ComfyUI) to avoid:
+    # - 15+ minute download times
+    # - 2-3GB disk space duplication  
+    # - Version conflict complexity with torchvision
     TRAINING_REQUIREMENTS = {
-        'torch': '2.5.1',  # Latest stable with CUDA 12.1 support
-        'torchvision': '0.20.1',
-        'transformers': '4.36.2',
+        'torch': 'SKIP',  # Use system PyTorch from ComfyUI
+        'torchvision': 'SKIP',  # Use system torchvision from ComfyUI
+        'transformers': '4.36.2',  # This needs isolation (GenerationMixin issue)
         'diffusers': '0.25.1',
         'accelerate': '0.25.0',
         'safetensors': '0.4.2',
@@ -32,7 +36,6 @@ class StandalonePackageManager:
         'omegaconf': '2.3.0',
         'einops': '0.7.0',
         'peft': '0.7.1',
-        'bitsandbytes': '0.41.3',  # Will be blocked by import_blocker
     }
     
     def __init__(self, base_dir: Optional[str] = None):
@@ -96,15 +99,7 @@ class StandalonePackageManager:
         return True, "Package directory created"
     
     def install_packages(self, progress_callback=None) -> Tuple[bool, List[str]]:
-        """
-        Install training requirements directly into libs directory.
-        
-        Args:
-            progress_callback: Optional callback(package_name, status)
-            
-        Returns:
-            (success, list_of_errors)
-        """
+        """Install training requirements (excluding torch/torchvision - use system versions)."""
         if not self.libs_dir.exists():
             return False, ["Package directory does not exist"]
         
@@ -124,81 +119,17 @@ class StandalonePackageManager:
         except Exception as e:
             print(f"[PKG-MGR] Warning: Could not upgrade pip: {e}")
         
-        # === TWO-STEP PyTorch Installation ===
-        # Step 1: Install torch
-        print("[PKG-MGR] Installing PyTorch with CUDA 12.1 support...")
-        torch_version = self.TRAINING_REQUIREMENTS['torch']
+        # === SKIP TORCH/TORCHVISION (Use system versions) ===
+        print("[PKG-MGR] Note: Using system PyTorch (already in ComfyUI)")
+        print("[PKG-MGR] Installing packages with correct versions...")
         
-        try:
-            if progress_callback:
-                progress_callback("torch", "installing")
-            
-            print(f"[PKG-MGR] Step 1/2: Installing torch {torch_version}...")
-            result_torch = subprocess.run(
-                [
-                    python_exe, "-m", "pip", "install",
-                    f"torch=={torch_version}",
-                    "--target", str(self.libs_dir),
-                    "--index-url", "https://download.pytorch.org/whl/cu121",
-                    "--no-warn-script-location",
-                    "--no-cache-dir",  # Prevent cache issues
-                ],
-                capture_output=True,
-                text=True,
-                timeout=900  # 15 minutes
-            )
-            
-            if result_torch.returncode != 0:
-                raise Exception(f"Torch installation failed: {result_torch.stderr}")
-            
-            installed.append('torch')
-            print("[PKG-MGR] ✓ torch installed successfully")
-            
-            # Step 2: Install torchvision
-            torchvision_version = self.TRAINING_REQUIREMENTS['torchvision']
-            print(f"[PKG-MGR] Step 2/2: Installing torchvision {torchvision_version}...")
-            
-            result_vision = subprocess.run(
-                [
-                    python_exe, "-m", "pip", "install",
-                    f"torchvision=={torchvision_version}",
-                    "--target", str(self.libs_dir),
-                    "--index-url", "https://download.pytorch.org/whl/cu121",
-                    "--no-warn-script-location",
-                    "--no-cache-dir",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minutes
-            )
-            
-            if result_vision.returncode != 0:
-                print(f"[PKG-MGR] Warning: torchvision install had issues: {result_vision.stderr}")
-                # Don't fail - torchvision is optional for training
-            else:
-                installed.append('torchvision')
-                print("[PKG-MGR] ✓ torchvision installed successfully")
-            
-            if progress_callback:
-                progress_callback("torch", "success")
-                
-        except subprocess.TimeoutExpired:
-            errors.append("torch: Installation timeout (15 min)")
-            print("[PKG-MGR] ✗ PyTorch installation timeout")
-            if progress_callback:
-                progress_callback("torch", "timeout")
-        except Exception as e:
-            errors.append(f"torch: {str(e)}")
-            print(f"[PKG-MGR] ✗ PyTorch installation failed: {e}")
-            if progress_callback:
-                progress_callback("torch", "failed")
-        
-        # Install other packages
+        # Install other packages (the ones that actually conflict)
         for package, version in self.TRAINING_REQUIREMENTS.items():
-            if package in ['torch', 'torchvision']:
-                continue  # Already installed
+            if version == 'SKIP':
+                print(f"[PKG-MGR] Skipping {package} (using system version)")
+                continue
             
-            # Skip bitsandbytes on Windows (causes issues)
+            # Skip bitsandbytes on Windows
             if package == 'bitsandbytes' and sys.platform == 'win32':
                 print(f"[PKG-MGR] Skipping {package} (Windows compatibility)")
                 continue
@@ -209,20 +140,17 @@ class StandalonePackageManager:
                 if progress_callback:
                     progress_callback(package, "installing")
                 
-                # Remove +cu121 suffix for regular packages
-                clean_version = version.split('+')[0]
-                package_spec = f"{package}=={clean_version}"
-                
                 result = subprocess.run(
                     [
                         python_exe, "-m", "pip", "install",
-                        package_spec,
+                        f"{package}=={version}",
                         "--target", str(self.libs_dir),
                         "--no-warn-script-location",
+                        "--no-deps",  # Important: don't install dependencies automatically
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=300  # 5 minutes per package
+                    timeout=180  # 3 minutes per package
                 )
                 
                 if result.returncode == 0:
@@ -231,20 +159,42 @@ class StandalonePackageManager:
                     if progress_callback:
                         progress_callback(package, "success")
                 else:
-                    error_msg = f"{package}: {result.stderr}"
+                    error_msg = f"{package}: {result.stderr[:200]}"
                     errors.append(error_msg)
-                    print(f"[PKG-MGR] ✗ {package} failed")
+                    print(f"[PKG-MGR] ✗ {package} failed: {result.stderr[:200]}")
                     if progress_callback:
                         progress_callback(package, "failed")
                         
             except subprocess.TimeoutExpired:
-                errors.append(f"{package}: Installation timeout")
+                errors.append(f"{package}: Timeout")
+                print(f"[PKG-MGR] ✗ {package} timeout")
                 if progress_callback:
                     progress_callback(package, "timeout")
             except Exception as e:
-                errors.append(f"{package}: {e}")
+                errors.append(f"{package}: {str(e)}")
+                print(f"[PKG-MGR] ✗ {package} failed: {e}")
                 if progress_callback:
                     progress_callback(package, "failed")
+        
+        # Save cache
+        cache_data = {
+            "installed_packages": installed,
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "note": "torch/torchvision use system packages",
+        }
+        
+        try:
+            with open(self.cache_file, "w") as f:
+                json.dump(cache_data, f, indent=2)
+        except Exception as e:
+            print(f"[PKG-MGR] Warning: Cache save failed: {e}")
+        
+        if errors:
+            print(f"[PKG-MGR] Completed with {len(errors)} errors")
+            return False, errors
+        else:
+            print(f"[PKG-MGR] ✓ Successfully installed {len(installed)} packages")
+            return True, []
         
         # Save cache
         cache_data = {
@@ -319,12 +269,7 @@ class StandalonePackageManager:
         return self.install_packages(progress_callback=progress_callback)
     
     def verify_installation(self) -> Tuple[bool, List[str]]:
-        """
-        Verify packages are installed and importable.
-        
-        Returns:
-            (all_ok, list_of_messages)
-        """
+        """Verify packages are installed and importable."""
         if not self.libs_dir.exists():
             return False, ["Package directory does not exist"]
         
@@ -335,8 +280,8 @@ class StandalonePackageManager:
         # Get modified environment
         env = self.get_modified_env()
         
-        # Test critical packages
-        test_packages = ['torch', 'transformers', 'diffusers', 'accelerate']
+        # Test critical packages (only the ones we installed)
+        test_packages = ['transformers', 'diffusers', 'accelerate']
         
         for package in test_packages:
             test_code = f"""
@@ -372,6 +317,19 @@ except Exception as e:
             except Exception as e:
                 messages.append(f"✗ {package}: {e}")
                 all_ok = False
+        
+        # Check system torch (should already be available)
+        try:
+            result = subprocess.run(
+                [python_exe, "-c", "import torch; print(f'torch:{torch.__version__} (system)')"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            messages.append(f"✓ {result.stdout.strip()}")
+        except Exception:
+            messages.append("✗ torch: not available (should come from ComfyUI system)")
+            all_ok = False
         
         return all_ok, messages
     
