@@ -52,6 +52,40 @@ class TrainingProcessManager:
         Raises:
             RuntimeError: If training is already running
         """
+        
+        # === PRE-FLIGHT ENVIRONMENT CHECK ===
+        try:
+            from .environment_checker import EnvironmentChecker
+            
+            print("[FLUX-TRAIN] Running environment check...")
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": "Running environment check..."})
+                except Exception:
+                    pass
+            
+            all_ok, messages = EnvironmentChecker.run_full_check()
+            
+            for msg in messages:
+                print(f"[FLUX-TRAIN] {msg}")
+                if PromptServer:
+                    try:
+                        PromptServer.instance.send_sync("flux_train_log", {"line": msg})
+                    except Exception:
+                        pass
+            
+            if not all_ok:
+                warning = "⚠ Environment check found issues - training may fail"
+                print(f"[FLUX-TRAIN] {warning}")
+                if PromptServer:
+                    try:
+                        PromptServer.instance.send_sync("flux_train_log", {"line": warning})
+                    except Exception:
+                        pass
+        except ImportError:
+            print("[FLUX-TRAIN] Environment checker not available, skipping pre-flight check")
+        # =====================================
+        
         if self.process and self.process.poll() is None:
             msg = "[FLUX-TRAIN] Warning: Process already running. Stop it first."
             print(msg)
@@ -170,29 +204,59 @@ class TrainingProcessManager:
             wrapper_content = f'''import sys
 import os
 
-# Add sd-scripts to sys.path BEFORE any imports
-# This ensures 'from library import ...' works in the training script
+# === CRITICAL: Install import blockers BEFORE any other imports ===
+# This must be the FIRST thing that happens to prevent
+# bitsandbytes/triton from trying to compile C extensions
+
+# Add sd-scripts to sys.path so we can import our blocker
 sys.path.insert(0, r"{script_dir_abs}")
+
+# Now import and activate the blocker system
+try:
+    # Import the blocker module from the plugin directory
+    plugin_src = r"{os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))}"
+    if plugin_src not in sys.path:
+        sys.path.insert(0, plugin_src)
+    
+    from import_blocker import install_import_blockers, verify_blockers_active
+    
+    # Install blockers BEFORE any ML library imports
+    install_import_blockers()
+    
+    # Verify they're working
+    if not verify_blockers_active():
+        print("[WRAPPER] WARNING: Import blockers may not be fully active!")
+    
+    print("[WRAPPER] ✓ Import protection system activated")
+except Exception as e:
+    print(f"[WRAPPER] WARNING: Could not install import blockers: {{e}}")
+    print("[WRAPPER] Continuing with environment variables only...")
+    
+    # Fallback: set env vars
+    os.environ["BITSANDBYTES_NOWELCOME"] = "1"
+    os.environ["DISABLE_TRITON"] = "1"
 
 # Verify library is accessible
 library_path = os.path.join(r"{script_dir_abs}", "library")
 if not os.path.exists(library_path):
-    print(f"ERROR: library folder not found at {{library_path}}")
-    print(f"sys.path: {{sys.path}}")
+    print(f"[WRAPPER] ERROR: library folder not found at {{library_path}}")
+    print(f"[WRAPPER] sys.path: {{sys.path}}")
     sys.exit(1)
 
 print(f"[WRAPPER] Added to sys.path: {script_dir_abs}")
 print(f"[WRAPPER] library module accessible at: {{library_path}}")
 
-# CRITICAL: Disable problematic imports that cause compilation issues
-# Triton/bitsandbytes require full dev environment which embedded Python lacks
-os.environ["BITSANDBYTES_NOWELCOME"] = "1"
-os.environ["DISABLE_TRITON"] = "1"
-os.environ["DISABLE_BITSANDBYTES_WARN"] = "1"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
-
 # Now execute the original training script
-exec(compile(open(r"{original_script_path}", encoding="utf-8").read(), r"{original_script_path}", "exec"))
+# The blocker will intercept any attempts to import triton/bitsandbytes
+try:
+    with open(r"{original_script_path}", "r", encoding="utf-8") as f:
+        code = compile(f.read(), r"{original_script_path}", "exec")
+        exec(code)
+except Exception as e:
+    print(f"[WRAPPER] Training script error: {{e}}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 '''
             
             # Write wrapper to temporary file

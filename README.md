@@ -10,14 +10,33 @@ Unlike standard training nodes that crash ComfyUI by sharing memory, this extens
 
 ## 🚀 Features
 
+- **🛡️ Embedded Python Protection**: Automatic import blocker system prevents compilation errors
 - **Process Isolation:** Runs training in a separate system process. ComfyUI stays responsive; VRAM is dedicated 100% to training.
 - **8GB VRAM Optimized:** Pre-configured presets using `bf16`, `adafactor`, `fp8_base`, and latent caching.
+- **🔍 Environment Validation**: Pre-flight checks detect issues before training starts
 - **Real-time Monitoring:** Streams training logs directly to the ComfyUI console window.
 - **Safety First:** Emergency Stop node included to kill background processes instantly.
 - **Ampere Ready:** Optimized for RTX 3000 series (supports native BF16).
 - **Production-Ready:** Clean architecture, comprehensive documentation, and version control ready.
 
 ## 🛠️ Prerequisites
+
+### System Requirements
+
+- **Python**: 3.10 or 3.11 (embedded or full)
+- **GPU**: NVIDIA with 8GB+ VRAM (RTX 3060 Ti / RTX 4060+)
+- **CUDA**: 11.8 or 12.1+
+- **Storage**: 20GB+ free space for models
+
+### Compatibility
+
+✅ Windows 10/11  
+✅ Embedded Python (portable ComfyUI)  
+✅ Full Python installations  
+✅ Kohya-ss sd-scripts (latest)  
+✅ Flux.1-dev and Flux.1-schnell models
+
+### Required Software
 
 1.  **Kohya SD-Scripts**: You must have [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts) installed locally.
     ```bash

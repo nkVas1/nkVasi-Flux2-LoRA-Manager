@@ -1,5 +1,74 @@
 # Troubleshooting Guide - ComfyUI FLUX.2 LoRA Manager
 
+## Quick Diagnostics
+
+Run this in ComfyUI console to check your environment:
+```python
+import sys
+sys.path.append("G:/ComfyUI-StableDif-t27-p312-cu128-v2.1/ComfyUI/custom_nodes/ComfyUI-Flux2-LoRA-Manager/src")
+from environment_checker import print_environment_report
+print_environment_report()
+```
+
+---
+
+## Error: "Python.h not found" / Triton compilation failure
+
+### Root Cause
+Embedded Python (portable) lacks development headers needed for C extension compilation.
+
+### Solution: Import Blocker System (Automatic - v1.3+)
+
+**v1.3+ automatically blocks problematic imports**. If you see this error, the blocker failed to activate.
+
+#### Automatic Fix (Recommended)
+
+The new Import Blocker System handles this automatically:
+- ✓ Blocks triton/bitsandbytes before they try to compile
+- ✓ Creates dummy modules so imports don't fail
+- ✓ Patches diffusers to skip quantizer imports
+- ✓ Works automatically on every training run
+
+**What to do if you still see the error:**
+
+1. **Verify blocker is installed:**
+   ```python
+   from src.import_blocker import verify_blockers_active
+   verify_blockers_active()
+   ```
+
+2. **Check console output for "[IMPORT-BLOCKER]" messages:**
+   - `[IMPORT-BLOCKER] Installed: triton, bitsandbytes imports will be blocked`
+   - `[IMPORT-BLOCKER] Verification passed`
+
+3. **If blocker failed, use full Python:**
+   - Download: [python.org](https://www.python.org/downloads/windows/)
+   - Version: Python 3.10 or 3.11 (not 3.12 yet)
+   - During install: ✓ "Add Python to PATH"
+   
+4. **Update ComfyUI to use full Python:**
+   Edit `run_nvidia_gpu.bat`:
+   ```batch
+   set PYTHON=C:\Python310\python.exe
+   %PYTHON% main.py
+   ```
+
+### Prevention
+
+The import blocker system uses Python's meta_path hooks to intercept imports **before** C compilation is attempted. This is the same technique used by:
+- PyTorch Lightning
+- Hugging Face Transformers
+- Ray (distributed computing)
+
+**How it works:**
+
+1. Wrapper script imports `import_blocker` first
+2. `install_import_blockers()` adds hooks to `sys.meta_path`
+3. Any attempt to `import triton` or `import bitsandbytes` returns dummy module
+4. Training continues without C compilation errors
+
+---
+
 ## Error: "can't open file 'flux_train_network.py': No such file or directory"
 
 ### Problem Description
