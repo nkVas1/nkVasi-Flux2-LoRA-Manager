@@ -69,16 +69,17 @@ class TrainingProcessManager:
         env = os.environ.copy()
         env["ACCELERATE_MIXED_PRECISION"] = "bf16"
         env["PYTHONIOENCODING"] = "utf-8"  # CRITICAL for Windows console output
+        env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for real-time logs
 
-        # === FIX: RELATIVE PATH STRATEGY for reliable 'library' module discovery ===
-        # Problem: accelerate may spawn child processes that ignore/lose PYTHONPATH
-        # Solution: Run process from sd-scripts directory with relative script name
-        # This ensures Python's working directory is where 'library' module exists
+        # === ULTIMATE FIX: Wrapper script to guarantee library module discovery ===
+        # Problem: accelerate subprocess loses parent's sys.path and cwd context
+        # Solution: Create wrapper that explicitly adds sd-scripts to sys.path BEFORE imports
         
         script_dir = cwd  # Default fallback
         script_name = None
+        original_script_path = None
         
-        # 1. Try to find sd-scripts directory more reliably
+        # 1. Find sd-scripts directory and original script path
         # First, extract script name and check if full path is provided
         for arg in cmd_list:
             if isinstance(arg, str) and arg.endswith(".py"):
@@ -87,9 +88,10 @@ class TrainingProcessManager:
                 # If full path provided and exists, use its directory
                 if os.path.exists(arg):
                     script_dir = os.path.dirname(os.path.abspath(arg))
+                    original_script_path = os.path.abspath(arg)
                     break
         
-        if script_name and script_dir == cwd:
+        if script_name and not original_script_path:
             # Script name is relative - search for sd-scripts location
             possible_paths = [
                 cwd,  # Assume cwd is sd-scripts
@@ -104,36 +106,108 @@ class TrainingProcessManager:
                 candidate = os.path.join(possible_path, script_name)
                 if os.path.exists(candidate):
                     script_dir = os.path.abspath(possible_path)
+                    original_script_path = os.path.abspath(candidate)
                     # Update cmd_list with full path to ensure it's found
                     for i, arg in enumerate(cmd_list):
                         if arg.endswith(".py") and not os.path.isabs(arg):
-                            cmd_list[i] = candidate
+                            cmd_list[i] = original_script_path
                     break
             else:
                 # Last resort: check for 'library' folder in possible paths
                 for possible_path in possible_paths:
                     if os.path.exists(os.path.join(possible_path, "library")):
                         script_dir = os.path.abspath(possible_path)
+                        original_script_path = os.path.join(script_dir, script_name)
                         # Update cmd_list with full path
                         for i, arg in enumerate(cmd_list):
                             if arg.endswith(".py"):
-                                cmd_list[i] = os.path.join(script_dir, script_name)
+                                cmd_list[i] = original_script_path
                         break
         
-        # 2. Set up PYTHONPATH as fallback (belt and suspenders approach)
+        # 2. Prepare PYTHONPATH with ABSOLUTE paths
+        script_dir_abs = os.path.abspath(script_dir)
+        cwd_abs = os.path.abspath(cwd)
         current_pythonpath = env.get("PYTHONPATH", "")
         
-        # Add both script_dir and cwd, with script_dir first (highest priority)
-        pythonpath_parts = [script_dir, cwd, current_pythonpath]
-        # Filter out empty strings and duplicates
-        pythonpath_parts = [p for p in pythonpath_parts if p]
-        env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+        # Build PYTHONPATH with absolute paths only
+        pythonpath_parts = [script_dir_abs]
         
-        # Debug: Log the working directory and PYTHONPATH (helps troubleshooting)
+        # Add ComfyUI root for other imports
+        if cwd_abs != script_dir_abs:
+            pythonpath_parts.append(cwd_abs)
+        
+        # Preserve existing PYTHONPATH
+        if current_pythonpath:
+            pythonpath_parts.extend(current_pythonpath.split(os.pathsep))
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        pythonpath_final = []
+        for p in pythonpath_parts:
+            if p and p not in seen:
+                seen.add(p)
+                pythonpath_final.append(p)
+        
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_final)
+        
+        # 3. Create wrapper script that adds paths to sys.path BEFORE imports
+        # This guarantees that when accelerate subprocess runs, it can find 'library'
+        wrapper_script_path = None
+        if original_script_path:
+            wrapper_content = f'''import sys
+import os
+
+# Add sd-scripts to sys.path BEFORE any imports
+# This ensures 'from library import ...' works in the training script
+sys.path.insert(0, r"{script_dir_abs}")
+
+# Verify library is accessible
+library_path = os.path.join(r"{script_dir_abs}", "library")
+if not os.path.exists(library_path):
+    print(f"ERROR: library folder not found at {{library_path}}")
+    print(f"sys.path: {{sys.path}}")
+    sys.exit(1)
+
+print(f"[WRAPPER] Added to sys.path: {script_dir_abs}")
+print(f"[WRAPPER] library module accessible at: {{library_path}}")
+
+# Now execute the original training script
+exec(compile(open(r"{original_script_path}", encoding="utf-8").read(), r"{original_script_path}", "exec"))
+'''
+            
+            # Write wrapper to temporary file
+            import tempfile
+            try:
+                wrapper_fd, wrapper_script_path = tempfile.mkstemp(suffix=".py", prefix="flux_train_wrapper_", text=True)
+                with os.fdopen(wrapper_fd, "w", encoding="utf-8") as f:
+                    f.write(wrapper_content)
+                
+                # Replace original script with wrapper in command list
+                for i, arg in enumerate(cmd_list):
+                    if arg == original_script_path or (isinstance(arg, str) and arg.endswith("flux_train_network.py")):
+                        cmd_list[i] = wrapper_script_path
+                        break
+                
+                debug_msg = f"Created wrapper script: {wrapper_script_path}"
+                print(f"[DEBUG] {debug_msg}")
+                if PromptServer:
+                    try:
+                        PromptServer.instance.send_sync("flux_train_log", {"line": f"DEBUG: {debug_msg}"})
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[WARNING] Failed to create wrapper script: {e}")
+                wrapper_script_path = None
+        
+        # Store wrapper path for cleanup later
+        self._wrapper_script = wrapper_script_path
+        
+        # 4. Debug logging
         debug_lines = [
-            f"Working Dir: {script_dir}",
+            f"Working Dir: {script_dir_abs}",
             f"PYTHONPATH: {env['PYTHONPATH']}",
-            f"Looking for: {os.path.join(script_dir, 'library')}",
+            f"Library path: {os.path.join(script_dir_abs, 'library')}",
+            f"Wrapper script: {wrapper_script_path if wrapper_script_path else 'not created'}",
         ]
         
         for debug_msg in debug_lines:
@@ -182,11 +256,10 @@ class TrainingProcessManager:
 
         try:
             # Launch subprocess with isolated I/O
-            # CRITICAL: Run from sd-scripts directory so relative script name resolves
-            # and so Python can find 'library' module in current working directory
+            # CRITICAL: Run from sd-scripts directory so Python can find 'library' module
             self.process = subprocess.Popen(
                 cmd_list,
-                cwd=script_dir,  # This MUST be sd-scripts directory!
+                cwd=script_dir_abs,  # Use absolute path - MUST be sd-scripts directory!
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -202,9 +275,9 @@ class TrainingProcessManager:
             if PromptServer:
                 try:
                     PromptServer.instance.send_sync("flux_train_log", {"line": startup_msg})
-                    PromptServer.instance.send_sync("flux_train_log", {"line": f"Working Dir: {script_dir}"})
+                    PromptServer.instance.send_sync("flux_train_log", {"line": f"Working Dir: {script_dir_abs}"})
                     PromptServer.instance.send_sync("flux_train_log", {"line": f"PYTHONPATH: {env.get('PYTHONPATH', 'not set')}"})
-                    PromptServer.instance.send_sync("flux_train_log", {"line": f"Command: {' '.join(cmd_list)}"})
+                    PromptServer.instance.send_sync("flux_train_log", {"line": f"Wrapper: {self._wrapper_script if hasattr(self, '_wrapper_script') and self._wrapper_script else 'N/A'}"})
                 except Exception as e:
                     print(f"[FLUX-TRAIN] Warning: Could not send startup message: {e}")
 
@@ -266,18 +339,22 @@ class TrainingProcessManager:
                     PromptServer.instance.send_sync("flux_train_log", {"line": err_msg})
                 except Exception:
                     pass
+        finally:
+            # Clean up wrapper script if it was created
+            if hasattr(self, '_wrapper_script') and self._wrapper_script:
+                try:
+                    if os.path.exists(self._wrapper_script):
+                        os.remove(self._wrapper_script)
+                        print(f"[DEBUG] Cleaned up wrapper: {self._wrapper_script}")
+                except Exception as e:
+                    print(f"[DEBUG] Failed to clean wrapper: {e}")
 
-                time.sleep(0.01)  # Small sleep to prevent busy-waiting
-
-        except Exception as e:
-            error_msg = f"[FLUX-TRAIN] Error in log reader: {e}"
-            print(error_msg)
+            # Send completion message
+            completion_msg = "--- TRAINING PROCESS COMPLETED ---"
+            print(f"[FLUX-TRAIN] {completion_msg}")
             if PromptServer:
                 try:
-                    PromptServer.instance.send_sync(
-                        "flux_train_log",
-                        {"line": error_msg}
-                    )
+                    PromptServer.instance.send_sync("flux_train_log", {"line": completion_msg})
                 except Exception:
                     pass
 
