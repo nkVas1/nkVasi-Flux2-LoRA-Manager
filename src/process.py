@@ -70,24 +70,37 @@ class TrainingProcessManager:
         env["ACCELERATE_MIXED_PRECISION"] = "bf16"
         env["PYTHONIOENCODING"] = "utf-8"  # CRITICAL for Windows console output
 
-        # === FIX: Add sd-scripts to PYTHONPATH for 'library' module discovery ===
-        # When flux_train_network.py runs, it needs to import library.device_utils
-        # Python won't find this automatically if we run from outside sd-scripts dir
+        # === FIX: ULTIMATE PYTHONPATH solution for 'library' module discovery ===
+        # Problem: accelerate might spawn child process that ignores/resets PYTHONPATH
+        # Solution: Aggressively add all relevant paths with absolute paths
         script_dir = cwd  # Default to provided CWD
         
-        # Search for the training script in cmd_list to find sd-scripts path
+        # 1. Find script directory from cmd_list (this is sd-scripts root)
         for arg in cmd_list:
             if isinstance(arg, str) and arg.endswith(".py") and os.path.exists(arg):
-                # Found the script! Use its directory
+                # Found the script! Use its absolute directory path
                 script_dir = os.path.dirname(os.path.abspath(arg))
                 break
         
-        # Add script directory to PYTHONPATH so Python finds 'library' module
+        # 2. Get current PYTHONPATH
         current_pythonpath = env.get("PYTHONPATH", "")
-        if current_pythonpath:
-            env["PYTHONPATH"] = f"{script_dir}{os.pathsep}{current_pythonpath}"
-        else:
-            env["PYTHONPATH"] = script_dir
+        
+        # 3. Build new PYTHONPATH with both script_dir and cwd
+        # CRITICAL: Add script_dir FIRST (highest priority)
+        # On Windows, os.pathsep is ';', on Unix it's ':'
+        new_pythonpath = f"{script_dir}{os.pathsep}{cwd}{os.pathsep}{current_pythonpath}"
+        
+        # Remove duplicate/empty path separators
+        env["PYTHONPATH"] = new_pythonpath.strip(os.pathsep)
+        
+        # Debug: Log the PYTHONPATH we're setting (helps troubleshooting)
+        debug_msg = f"PYTHONPATH set to: {env['PYTHONPATH']}"
+        print(f"[DEBUG] {debug_msg}")
+        if PromptServer:
+            try:
+                PromptServer.instance.send_sync("flux_train_log", {"line": f"DEBUG: {debug_msg}"})
+            except Exception:
+                pass
         # ========================================================================
 
         # Windows-specific: Create new console group to allow clean termination

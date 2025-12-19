@@ -149,6 +149,7 @@ class Flux2_8GB_Configurator:
             python_exe,
             "-u",  # Unbuffered output - IMPORTANT for real-time logs!
             "-m", "accelerate.commands.launch",  # Run accelerate as module
+            "--num_processes=1",  # Explicitly use 1 process (avoid child process PYTHONPATH issues)
             "--mixed_precision=bf16",
             "--num_cpu_threads_per_process=2",
             script_path,
@@ -171,7 +172,6 @@ class Flux2_8GB_Configurator:
             "--optimizer_type", "adafactor",
             "--optimizer_args", "scale_parameter=False", "relative_step=False", "warmup_init=False",
             "--fp8_base",  # Crucial for 8GB: quantizes base model to FP8
-            "--highvram",  # Enables smart offloading in Kohya
         ]
 
         # Remove empty strings from command
