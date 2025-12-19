@@ -8,7 +8,15 @@ A professional ComfyUI wrapper designed specifically for training **FLUX.2/FLUX.
 
 Unlike standard training nodes that crash ComfyUI by sharing memory, this extension orchestrates `kohya-ss/sd-scripts` in a **detached subprocess**, utilizing **QLoRA (NF4)**, **FP8 Base**, and **CPU Offloading** to fit training into 8GB VRAM.
 
-## 🚀 Features
+## � Documentation
+
+- **[USAGE_GUIDE.md](USAGE_GUIDE.md)** - Complete step-by-step usage guide ⭐ START HERE
+- **[INFINITE_LOOP_FIX.md](INFINITE_LOOP_FIX.md)** - Fixed critical infinite loop issue in v1.5.1
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common errors and solutions
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and changes
+- **[verify_installation.py](verify_installation.py)** - Pre-flight system check script
+
+## �🚀 Features
 
 - **🛡️ Embedded Python Protection**: Automatic import blocker system prevents compilation errors
 - **Process Isolation:** Runs training in a separate system process. ComfyUI stays responsive; VRAM is dedicated 100% to training.

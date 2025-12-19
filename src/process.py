@@ -259,56 +259,69 @@ class TrainingProcessManager:
         # This guarantees that when accelerate subprocess runs, it can find 'library'
         wrapper_script_path = None
         if original_script_path:
+            # Convert paths to forward slashes to avoid escape sequence issues
+            script_dir_forward = script_dir_abs.replace('\\', '/')
+            plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            plugin_src_forward = os.path.join(plugin_dir, 'src').replace('\\', '/')
+            original_script_forward = original_script_path.replace('\\', '/')
+            
             wrapper_content = f'''import sys
 import os
 
-# === CRITICAL: Install import blockers BEFORE any other imports ===
-# This must be the FIRST thing that happens to prevent
-# bitsandbytes/triton from trying to compile C extensions
+# === STEP 1: Prioritize training_libs in sys.path ===
+# This MUST be FIRST to override system packages
+training_libs = r"{script_dir_abs}".replace("\\\\", "/") + "/../../../custom_nodes/ComfyUI-Flux2-LoRA-Manager/training_libs"
+training_libs = os.path.normpath(training_libs)
 
-# Add sd-scripts to sys.path so we can import our blocker
-sys.path.insert(0, r"{script_dir_abs}")
+if os.path.exists(training_libs):
+    # Insert at position 0 (highest priority)
+    sys.path.insert(0, training_libs)
+    print(f"[WRAPPER] ✓ Training libs prioritized: {{training_libs}}")
 
-# Now import and activate the blocker system
+# === STEP 2: Add sd-scripts to sys.path ===
+sys.path.insert(0, r"{script_dir_forward}")
+
+# === STEP 3: Import blocker system ===
 try:
-    # Import the blocker module from the plugin directory
-    plugin_src = r"{os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))}"
+    plugin_src = r"{plugin_src_forward}"
     if plugin_src not in sys.path:
         sys.path.insert(0, plugin_src)
     
     from import_blocker import install_import_blockers, verify_blockers_active
-    
-    # Install blockers BEFORE any ML library imports
     install_import_blockers()
     
-    # Verify they're working
-    if not verify_blockers_active():
-        print("[WRAPPER] WARNING: Import blockers may not be fully active!")
-    
-    print("[WRAPPER] ✓ Import protection system activated")
+    if verify_blockers_active():
+        print("[WRAPPER] ✓ Import protection system activated")
+    else:
+        print("[WRAPPER] ⚠ Import blockers partially active")
+        
 except Exception as e:
-    print(f"[WRAPPER] WARNING: Could not install import blockers: {{e}}")
-    print("[WRAPPER] Continuing with environment variables only...")
-    
-    # Fallback: set env vars
+    print(f"[WRAPPER] WARNING: Import blocker setup failed: {{e}}")
     os.environ["BITSANDBYTES_NOWELCOME"] = "1"
     os.environ["DISABLE_TRITON"] = "1"
 
-# Verify library is accessible
-library_path = os.path.join(r"{script_dir_abs}", "library")
+# === STEP 4: Verify library module ===
+library_path = os.path.join(r"{script_dir_forward}", "library")
 if not os.path.exists(library_path):
-    print(f"[WRAPPER] ERROR: library folder not found at {{library_path}}")
-    print(f"[WRAPPER] sys.path: {{sys.path}}")
+    print(f"[WRAPPER] ERROR: library not found at {{library_path}}")
     sys.exit(1)
 
-print(f"[WRAPPER] Added to sys.path: {script_dir_abs}")
-print(f"[WRAPPER] library module accessible at: {{library_path}}")
+print(f"[WRAPPER] Added sd-scripts to sys.path: {script_dir_forward}")
+print(f"[WRAPPER] library module accessible")
 
-# Now execute the original training script
-# The blocker will intercept any attempts to import triton/bitsandbytes
+# === STEP 5: Debug - check transformers source ===
 try:
-    with open(r"{original_script_path}", "r", encoding="utf-8") as f:
-        code = compile(f.read(), r"{original_script_path}", "exec")
+    import transformers
+    print(f"[WRAPPER] transformers version: {{transformers.__version__}}")
+    print(f"[WRAPPER] transformers from: {{transformers.__file__}}")
+except ImportError as e:
+    print(f"[WRAPPER] WARNING: transformers import failed: {{e}}")
+
+# === STEP 6: Execute training script ===
+try:
+    script_path = r"{original_script_forward}"
+    with open(script_path, "r", encoding="utf-8") as f:
+        code = compile(f.read(), script_path, "exec")
         exec(code)
 except Exception as e:
     print(f"[WRAPPER] Training script error: {{e}}")

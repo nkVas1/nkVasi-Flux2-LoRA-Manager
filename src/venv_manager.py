@@ -20,10 +20,10 @@ class StandalonePackageManager:
     Compatible with embedded Python.
     """
     
-    # Exact versions that work with sd-scripts
+    # Exact versions that work with sd-scripts (PyTorch 2.5.1 latest stable)
     TRAINING_REQUIREMENTS = {
-        'torch': '2.1.2+cu121',
-        'torchvision': '0.16.2+cu121',
+        'torch': '2.5.1',  # Latest stable with CUDA 12.1 support
+        'torchvision': '0.20.1',
         'transformers': '4.36.2',
         'diffusers': '0.25.1',
         'accelerate': '0.25.0',
@@ -124,46 +124,72 @@ class StandalonePackageManager:
         except Exception as e:
             print(f"[PKG-MGR] Warning: Could not upgrade pip: {e}")
         
-        # Install PyTorch first (with CUDA)
-        print("[PKG-MGR] Installing PyTorch with CUDA support...")
-        torch_spec = f"torch=={self.TRAINING_REQUIREMENTS['torch']}"
-        torchvision_spec = f"torchvision=={self.TRAINING_REQUIREMENTS['torchvision']}"
+        # === TWO-STEP PyTorch Installation ===
+        # Step 1: Install torch
+        print("[PKG-MGR] Installing PyTorch with CUDA 12.1 support...")
+        torch_version = self.TRAINING_REQUIREMENTS['torch']
         
         try:
             if progress_callback:
                 progress_callback("torch", "installing")
             
-            # Install to target directory
-            result = subprocess.run(
+            print(f"[PKG-MGR] Step 1/2: Installing torch {torch_version}...")
+            result_torch = subprocess.run(
                 [
                     python_exe, "-m", "pip", "install",
-                    torch_spec, torchvision_spec,
+                    f"torch=={torch_version}",
                     "--target", str(self.libs_dir),
                     "--index-url", "https://download.pytorch.org/whl/cu121",
                     "--no-warn-script-location",
+                    "--no-cache-dir",  # Prevent cache issues
                 ],
                 capture_output=True,
                 text=True,
-                timeout=900  # 15 minutes for torch
+                timeout=900  # 15 minutes
             )
             
-            if result.returncode == 0:
-                installed.extend(['torch', 'torchvision'])
-                print("[PKG-MGR] ✓ PyTorch installed")
-                if progress_callback:
-                    progress_callback("torch", "success")
+            if result_torch.returncode != 0:
+                raise Exception(f"Torch installation failed: {result_torch.stderr}")
+            
+            installed.append('torch')
+            print("[PKG-MGR] ✓ torch installed successfully")
+            
+            # Step 2: Install torchvision
+            torchvision_version = self.TRAINING_REQUIREMENTS['torchvision']
+            print(f"[PKG-MGR] Step 2/2: Installing torchvision {torchvision_version}...")
+            
+            result_vision = subprocess.run(
+                [
+                    python_exe, "-m", "pip", "install",
+                    f"torchvision=={torchvision_version}",
+                    "--target", str(self.libs_dir),
+                    "--index-url", "https://download.pytorch.org/whl/cu121",
+                    "--no-warn-script-location",
+                    "--no-cache-dir",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 minutes
+            )
+            
+            if result_vision.returncode != 0:
+                print(f"[PKG-MGR] Warning: torchvision install had issues: {result_vision.stderr}")
+                # Don't fail - torchvision is optional for training
             else:
-                error_msg = f"torch: {result.stderr}"
-                errors.append(error_msg)
-                print(f"[PKG-MGR] ✗ PyTorch failed: {result.stderr}")
-                if progress_callback:
-                    progress_callback("torch", "failed")
+                installed.append('torchvision')
+                print("[PKG-MGR] ✓ torchvision installed successfully")
+            
+            if progress_callback:
+                progress_callback("torch", "success")
+                
         except subprocess.TimeoutExpired:
             errors.append("torch: Installation timeout (15 min)")
+            print("[PKG-MGR] ✗ PyTorch installation timeout")
             if progress_callback:
                 progress_callback("torch", "timeout")
         except Exception as e:
-            errors.append(f"torch: {e}")
+            errors.append(f"torch: {str(e)}")
+            print(f"[PKG-MGR] ✗ PyTorch installation failed: {e}")
             if progress_callback:
                 progress_callback("torch", "failed")
         
@@ -270,6 +296,28 @@ class StandalonePackageManager:
         
         return env
     
+    def install_packages_with_ui_progress(self) -> Tuple[bool, List[str]]:
+        """
+        Install packages with progress updates to ComfyUI UI.
+        """
+        # Import PromptServer if available
+        try:
+            from server import PromptServer
+        except ImportError:
+            PromptServer = None
+        
+        def progress_callback(package_name, status):
+            """Send progress update to UI."""
+            if PromptServer:
+                try:
+                    message = f"[PKG] {package_name}: {status}"
+                    PromptServer.instance.send_sync("flux_train_log", {"line": message})
+                except Exception:
+                    pass
+            print(f"[PKG-MGR] {package_name}: {status}")
+        
+        return self.install_packages(progress_callback=progress_callback)
+    
     def verify_installation(self) -> Tuple[bool, List[str]]:
         """
         Verify packages are installed and importable.
@@ -347,7 +395,7 @@ except Exception as e:
         print("[PKG-MGR] Installing training packages...")
         print("[PKG-MGR] This may take 5-10 minutes on first run...")
         
-        success, errors = self.install_packages()
+        success, errors = self.install_packages_with_ui_progress()  # With UI progress
         
         if not success:
             error_msg = "Failed to install some packages:\n" + "\n".join(errors[:5])  # Show first 5 errors
