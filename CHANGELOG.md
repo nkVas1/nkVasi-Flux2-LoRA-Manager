@@ -56,7 +56,106 @@ Test:
 
 ---
 
-# v1.5.0 - Embedded Python Support via pip install --target (2025-01)
+# v1.5.2 - PyTorch 2.5.1 + Progress Tracking + Wrapper Improvements (2025-01)
+
+## Major Improvements
+
+### PyTorch 2.5.1 Upgrade
+- Updated from PyTorch 2.1.2 to **2.5.1** (latest stable)
+- Better CUDA 12.1 compatibility
+- Improved performance and memory efficiency
+- Two-step installation (torch → torchvision) for reliability
+
+### Real-time Progress Tracking (New)
+- Added `js/progress_tracker.js` for browser-based progress visualization
+- Real-time progress bars for training steps
+- Package installation progress monitoring
+- Live loss value display
+- Auto-hide panel on completion
+
+### Wrapper Script Improvements
+- Complete rewrite of wrapper_content in process.py
+- Forward-slash path handling (prevents escape sequence issues)
+- Better prioritization of training_libs in sys.path
+- Cleaner 6-step initialization process:
+  1. Prioritize training_libs
+  2. Add sd-scripts to path
+  3. Install import blockers
+  4. Verify library module
+  5. Debug transformers source
+  6. Execute training script
+
+### Package Manager Enhancements
+- `install_packages_with_ui_progress()` method for UI integration
+- Progress callbacks for each package installation
+- Two-step PyTorch installation (separate torch and torchvision)
+- Better error handling with detailed messages
+
+## Files Changed
+
+| File | Change | Impact |
+|------|--------|--------|
+| `src/venv_manager.py` | PyTorch 2.5.1, UI progress, two-step install | Critical |
+| `src/process.py` | Complete wrapper rewrite, path handling | Critical |
+| `js/progress_tracker.js` | **NEW** - Progress visualization | Enhancement |
+| `__init__.py` | WEB_DIRECTORY registration | Config |
+
+## Technical Details
+
+### PyTorch Versions (Before → After)
+```
+torch:          2.1.2+cu121  → 2.5.1
+torchvision:    0.16.2+cu121 → 0.20.1
+CUDA Index:     https://download.pytorch.org/whl/cu121 (same)
+```
+
+### Two-Step Installation Benefits
+1. **Reliability**: Each package installed separately (can retry individually)
+2. **Error clarity**: Separate error messages for torch vs torchvision
+3. **Flexibility**: Can handle torch-only failures without blocking training
+
+### Wrapper Path Handling
+```python
+# OLD (escape issues on Windows)
+wrapper_content = f'''import sys...{script_dir_abs}...'''
+# → Backslashes not escaped properly
+
+# NEW (safe forward slashes)
+script_dir_forward = script_dir_abs.replace('\\', '/')
+wrapper_content = f'''...{script_dir_forward}...'''
+# → All paths use forward slashes (platform safe)
+```
+
+## What This Fixes
+
+- ✅ "No module named 'torch'" - PyTorch 2.5.1 more stable
+- ✅ SyntaxWarning about invalid escape sequences
+- ✅ Wrapper not finding transformers - Better prioritization
+- ✅ No progress feedback - Real-time progress bars
+- ✅ Package installation failures - Two-step install with retries
+
+## Version Compatibility
+
+- Supports PyTorch 2.5.1 with CUDA 12.1
+- Works with Transformers 4.36.2 (GenerationMixin fix)
+- Requires sd-scripts updated within last 3 months
+- Compatible with all previous v1.5.x configurations
+
+## Breaking Changes
+
+None - fully backward compatible with v1.5.0/v1.5.1
+
+## Next Release (v1.6.0 planned)
+
+- [ ] Multi-GPU training support
+- [ ] Custom model architecture support
+- [ ] Checkpoint management UI
+- [ ] Training metrics export (CSV/JSON)
+- [ ] ONNX model export option
+
+---
+
+# v1.5.1 - Critical Infinite Loop Fix in Runner/Stopper Nodes (2025-01)
 
 ## 🎯 Главное улучшение
 
