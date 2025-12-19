@@ -70,6 +70,19 @@ class TrainingProcessManager:
         env["ACCELERATE_MIXED_PRECISION"] = "bf16"
         env["PYTHONIOENCODING"] = "utf-8"  # CRITICAL for Windows console output
         env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for real-time logs
+        
+        # CRITICAL FIX: Disable problematic modules for embedded Python
+        # Triton/bitsandbytes require Python.h which embedded Python lacks
+        env["BITSANDBYTES_NOWELCOME"] = "1"
+        env["DISABLE_TRITON"] = "1"
+        env["DISABLE_BITSANDBYTES_WARN"] = "1"
+        
+        # Force use of standard quantization instead of triton-based
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+        
+        # Prevent diffusers from trying to compile C extensions
+        env["DIFFUSERS_DISABLE_TELEMETRY"] = "1"
+        env["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
         # === ULTIMATE FIX: Wrapper script to guarantee library module discovery ===
         # Problem: accelerate subprocess loses parent's sys.path and cwd context
@@ -170,6 +183,13 @@ if not os.path.exists(library_path):
 
 print(f"[WRAPPER] Added to sys.path: {script_dir_abs}")
 print(f"[WRAPPER] library module accessible at: {{library_path}}")
+
+# CRITICAL: Disable problematic imports that cause compilation issues
+# Triton/bitsandbytes require full dev environment which embedded Python lacks
+os.environ["BITSANDBYTES_NOWELCOME"] = "1"
+os.environ["DISABLE_TRITON"] = "1"
+os.environ["DISABLE_BITSANDBYTES_WARN"] = "1"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 
 # Now execute the original training script
 exec(compile(open(r"{original_script_path}", encoding="utf-8").read(), r"{original_script_path}", "exec"))

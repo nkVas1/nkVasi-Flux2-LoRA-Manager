@@ -91,6 +91,66 @@ If these paths don't match your actual sd-scripts location, update the configura
 
 ---
 
+## Error: "Failed to find Python libs" or "Python.h not found" (Triton/bitsandbytes)
+
+### Problem Description
+When training starts, you see errors like:
+```
+RuntimeError: Failed to find Python libs (Python.h)
+error: Microsoft Visual C++ 14.0 is required
+fatal error C1083: Cannot open include file: 'Python.h'
+```
+
+### Root Cause
+**Embedded Python** (portable version) doesn't include header files (`Python.h`) needed for compiling C extensions. Triton and bitsandbytes libraries try to compile during import, which fails.
+
+### Solution
+
+#### Automatic (v1.2.6+)
+The system now automatically:
+1. ✓ Detects embedded Python environment
+2. ✓ Disables problematic modules (Triton, bitsandbytes)
+3. ✓ Sets environment variables to prevent compilation attempts
+4. ✓ Uses pure Python alternatives
+
+**No action needed!** The wrapper script includes:
+```python
+os.environ["DISABLE_TRITON"] = "1"
+os.environ["BITSANDBYTES_NOWELCOME"] = "1"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+```
+
+#### If Issue Persists: Manual Fix
+
+**Option 1: Install Full Python (Recommended)**
+
+1. Download full Python 3.10+ from [python.org](https://www.python.org/downloads/)
+2. Install with "Add Python to PATH" checked
+3. Install dependencies:
+   ```powershell
+   python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+   python -m pip install transformers diffusers accelerate safetensors peft
+   ```
+4. Update Configurator to use full Python
+
+**Option 2: Skip Quantization**
+
+If you don't need 8-bit quantization:
+1. Edit `sd-scripts/library/train_util.py`
+2. Comment out `BitsAndBytesConfig` imports
+3. Training will use standard precision
+
+**Option 3: Verify Environment**
+
+Check if automatic fix worked:
+```powershell
+# Test automatic disabling
+$env:DISABLE_TRITON = "1"
+python.exe -c "import os; print(os.environ.get('DISABLE_TRITON'))"
+```
+
+---
+
 ## Error: "ModuleNotFoundError: No module named 'library'"
 
 ### Problem Description

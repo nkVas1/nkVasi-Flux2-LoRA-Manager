@@ -84,4 +84,53 @@ def get_file_size_mb(path: Union[str, Path]) -> float:
     return Path(path).stat().st_size / (1024 * 1024)
 
 
+def is_embedded_python():
+    """Check if running in embedded Python environment."""
+    import sys
+    # Embedded Python typically lacks 'include' directory with headers
+    python_include = os.path.join(sys.prefix, 'include')
+    return not os.path.exists(python_include)
+
+
+def get_safe_env_for_training():
+    """
+    Get environment variables that prevent compilation errors
+    in embedded Python.
+    """
+    import sys
+    env = os.environ.copy()
+    
+    if is_embedded_python():
+        # Disable packages that try to compile C extensions
+        env.update({
+            "BITSANDBYTES_NOWELCOME": "1",
+            "DISABLE_TRITON": "1",
+            "DISABLE_BITSANDBYTES_WARN": "1",
+            "DIFFUSERS_DISABLE_TELEMETRY": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:512",
+            # Force CPU compilation for bitsandbytes if it must load
+            "BNB_CUDA_VERSION": "0",
+        })
+    
+    return env
+
+
+def patch_diffusers_imports():
+    """
+    Monkey-patch diffusers to avoid importing bitsandbytes/triton.
+    Call this before importing diffusers in training scripts.
+    """
+    import sys
+    import types
+    import warnings
+    
+    # Create dummy modules to prevent import errors
+    for module_name in ['bitsandbytes', 'triton']:
+        if module_name not in sys.modules:
+            dummy = types.ModuleType(module_name)
+            dummy.__path__ = []
+            sys.modules[module_name] = dummy
+            warnings.warn(f"Patched {module_name} with dummy module (requires full Python dev environment)")
+
+
 logger = setup_logging()
