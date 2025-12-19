@@ -1,125 +1,105 @@
 /**
- * FLUX.2 LoRA Training Monitor Extension
+ * FLUX.2 LoRA Training Monitor Extension (v2.0)
  * 
  * Displays real-time training logs in a floating panel within ComfyUI browser interface.
  * Receives log data via WebSocket from Python backend (TrainingProcessManager).
+ * 
+ * Key improvements:
+ * - Console logging for debugging
+ * - Unbuffered output handling
+ * - Better error detection
+ * - Robust registration
  */
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+console.log("%c[FLUX Monitor] Loading Extension...", "color: cyan; font-weight: bold; font-size: 14px;");
+
 app.registerExtension({
     name: "Flux2.LoRA.Monitor",
     
     async setup() {
-        // =====================================================================
-        // CREATE FLOATING LOG PANEL
-        // =====================================================================
+        console.log("%c[FLUX Monitor] Setup Started", "color: cyan; font-weight: bold;");
+        
+        // Remove old panel if exists (for script reloads)
+        const oldPanel = document.getElementById("flux-monitor-panel");
+        if (oldPanel) oldPanel.remove();
         
         const logPanel = document.createElement("div");
+        logPanel.id = "flux-monitor-panel";
         
-        // Styling for the log panel
+        // Styling for the log panel - positioned at bottom right, always on top
         Object.assign(logPanel.style, {
             position: "fixed",
             bottom: "10px",
             right: "10px",
-            width: "600px",
-            height: "350px",
-            background: "rgba(0, 0, 0, 0.95)",
+            width: "60%",
+            maxWidth: "900px",
+            height: "320px",
+            background: "rgba(10, 10, 20, 0.97)",
             color: "#00ff00",
-            fontFamily: "'Courier New', monospace",
-            fontSize: "12px",
-            lineHeight: "1.4",
+            fontFamily: "Consolas, 'Courier New', monospace",
+            fontSize: "11px",
+            lineHeight: "1.3",
             overflowY: "auto",
             overflowX: "hidden",
-            zIndex: "9999",
-            padding: "12px",
-            borderRadius: "6px",
+            zIndex: "10000",
+            padding: "10px",
+            borderRadius: "4px",
             border: "2px solid #00ff00",
-            boxShadow: "0 0 20px rgba(0, 255, 0, 0.3)",
-            display: "none", // Hidden by default
+            boxShadow: "0 0 20px rgba(0, 255, 0, 0.3), inset 0 0 10px rgba(0, 255, 0, 0.1)",
+            display: "none",
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
-            scrollBehavior: "smooth"
+            scrollBehavior: "smooth",
+            pointerEvents: "auto"
         });
         
         document.body.appendChild(logPanel);
 
         // =====================================================================
-        // HEADER/TITLE BAR
+        // HEADER WITH CLOSE BUTTON
         // =====================================================================
         
-        const titleBar = document.createElement("div");
-        Object.assign(titleBar.style, {
-            position: "absolute",
+        const header = document.createElement("div");
+        Object.assign(header.style, {
+            position: "sticky",
             top: "0",
-            left: "0",
-            right: "0",
-            height: "30px",
-            background: "rgba(0, 150, 0, 0.3)",
+            background: "rgba(0, 100, 0, 0.5)",
             borderBottom: "1px solid #00ff00",
+            padding: "5px 8px",
+            marginBottom: "5px",
             display: "flex",
-            alignItems: "center",
             justifyContent: "space-between",
-            paddingLeft: "10px",
-            paddingRight: "10px",
-            cursor: "move",
+            alignItems: "center",
+            cursor: "pointer",
             userSelect: "none"
         });
         
-        titleBar.innerHTML = `
-            <span style="font-weight: bold; color: #00ff00;">🚀 FLUX.2 Training Monitor</span>
-            <span style="font-size: 10px; color: #888;">Click to close</span>
+        header.innerHTML = `
+            <span><strong style="color: #00ff00;">🚀 FLUX.2 Training Monitor</strong></span>
+            <span style="font-size: 10px; color: #888; cursor: pointer;">[CLOSE]</span>
         `;
         
-        logPanel.appendChild(titleBar);
+        const closeBtn = header.querySelector("span:last-child");
+        closeBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            logPanel.style.display = "none";
+            console.log("[FLUX Monitor] Panel closed by user");
+        });
+        
+        logPanel.appendChild(header);
 
         // =====================================================================
         // LOG CONTENT AREA
         // =====================================================================
         
-        const logContent = document.createElement("div");
-        Object.assign(logContent.style, {
-            position: "absolute",
-            top: "35px",
-            left: "0",
-            right: "0",
-            bottom: "0",
-            overflowY: "auto",
-            overflowX: "hidden",
-            padding: "10px",
-            fontSize: "11px"
-        });
-        
-        logPanel.appendChild(logContent);
-
-        // =====================================================================
-        // STATUS INDICATOR
-        // =====================================================================
-        
-        let trainingActive = false;
-        const statusDot = document.createElement("span");
-        statusDot.style.display = "inline-block";
-        statusDot.style.width = "8px";
-        statusDot.style.height = "8px";
-        statusDot.style.borderRadius = "50%";
-        statusDot.style.marginRight = "5px";
-        statusDot.style.background = "#888";
-        statusDot.style.animation = "none";
-        
-        // Add blinking animation CSS
-        const style = document.createElement("style");
-        style.innerHTML = `
-            @keyframes pulse {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.3; }
-            }
-            .flux-training-active {
-                animation: pulse 1s infinite;
-                background: #00ff00 !important;
-            }
-        `;
-        document.head.appendChild(style);
+        const contentDiv = document.createElement("div");
+        contentDiv.style.maxHeight = "280px";
+        contentDiv.style.overflowY = "auto";
+        contentDiv.style.fontFamily = "Consolas, monospace";
+        logPanel.appendChild(contentDiv);
 
         // =====================================================================
         // EVENT LISTENERS
@@ -129,101 +109,57 @@ app.registerExtension({
         api.addEventListener("flux_train_log", (event) => {
             const data = event.detail;
             
-            if (!data) return;
+            if (!data || !data.line) {
+                console.warn("[FLUX Monitor] Received empty event");
+                return;
+            }
 
-            // Show panel when training starts
+            // Show panel when first log arrives
             if (logPanel.style.display === "none") {
                 logPanel.style.display = "block";
-                logContent.innerHTML = "";
-                trainingActive = true;
-                statusDot.className = "flux-training-active";
-                titleBar.innerHTML = `
-                    <span>${statusDot.outerHTML}<span style="font-weight: bold; color: #00ff00;">🚀 FLUX.2 Training Monitor [RUNNING]</span></span>
-                    <span style="font-size: 10px; color: #888;">Click to close</span>
-                `;
+                console.log("[FLUX Monitor] Log panel shown");
             }
 
-            // Add log line
-            const logLine = document.createElement("div");
-            logLine.textContent = data.line || String(data);
+            // Create log line
+            const line = document.createElement("div");
+            line.textContent = `> ${data.line}`;
+            line.style.borderBottom = "1px solid #1a1a2a";
+            line.style.paddingBottom = "2px";
+            line.style.marginBottom = "2px";
             
             // Color-code based on content
-            if (data.line) {
-                const text = data.line.toLowerCase();
-                if (text.includes("error") || text.includes("exception") || text.includes("cuda")) {
-                    logLine.style.color = "#ff6b6b";
-                    logLine.style.fontWeight = "bold";
-                } else if (text.includes("warning")) {
-                    logLine.style.color = "#ffff00";
-                } else if (text.includes("finished") || text.includes("success")) {
-                    logLine.style.color = "#00ff00";
-                    logLine.style.fontWeight = "bold";
-                } else if (text.includes("step") || text.includes("epoch") || text.includes("loss")) {
-                    logLine.style.color = "#00ccff";
-                } else if (text.includes("loading") || text.includes("preparing")) {
-                    logLine.style.color = "#ffaa00";
-                }
+            const textLower = data.line.toLowerCase();
+            
+            if (textLower.includes("error") || textLower.includes("exception") || textLower.includes("traceback")) {
+                line.style.color = "#ff6b6b";
+                line.style.fontWeight = "bold";
+            } else if (textLower.includes("warning")) {
+                line.style.color = "#ffff00";
+            } else if (textLower.includes("success") || textLower.includes("completed") || textLower.includes("finished")) {
+                line.style.color = "#00ff00";
+                line.style.fontWeight = "bold";
+            } else if (textLower.includes("step") || textLower.includes("epoch") || textLower.includes("loss") || textLower.includes("%")) {
+                line.style.color = "#00ccff";
+            } else if (textLower.includes("loading") || textLower.includes("preparing") || textLower.includes("initializing")) {
+                line.style.color = "#ffaa00";
+            } else if (textLower.includes("started") || textLower.includes("begin")) {
+                line.style.color = "#88ff88";
             }
             
-            logContent.appendChild(logLine);
+            contentDiv.appendChild(line);
             
+            // Limit buffer (prevent browser freeze)
+            if (contentDiv.childElementCount > 1000) {
+                contentDiv.removeChild(contentDiv.firstChild);
+            }
+
             // Auto-scroll to bottom
-            logContent.scrollTop = logContent.scrollHeight;
-
-            // Mark completion
-            if (data.line && (data.line.includes("Training Finished") || data.line.includes("Error occurred"))) {
-                trainingActive = false;
-                statusDot.className = "";
-                statusDot.style.background = data.line.includes("Error") ? "#ff0000" : "#00ff00";
-                const finalLine = document.createElement("div");
-                finalLine.textContent = data.line.includes("Error") ? "❌ TRAINING FAILED" : "✅ TRAINING COMPLETED";
-                finalLine.style.color = data.line.includes("Error") ? "#ff0000" : "#00ff00";
-                finalLine.style.fontWeight = "bold";
-                finalLine.style.marginTop = "10px";
-                finalLine.style.padding = "5px";
-                finalLine.style.borderTop = "1px solid #555";
-                logContent.appendChild(finalLine);
-            }
+            contentDiv.scrollTop = contentDiv.scrollHeight;
+            
+            // Log to browser console
+            console.log("[FLUX-TRAIN]", data.line);
         });
-
-        // Click to close panel
-        titleBar.addEventListener("click", () => {
-            logPanel.style.display = "none";
-            trainingActive = false;
-            statusDot.className = "";
-        });
-
-        // =====================================================================
-        // DRAGGING FUNCTIONALITY
-        // =====================================================================
         
-        let isDragging = false;
-        let dragOffsetX = 0;
-        let dragOffsetY = 0;
-
-        titleBar.addEventListener("mousedown", (e) => {
-            isDragging = true;
-            dragOffsetX = e.clientX - logPanel.offsetLeft;
-            dragOffsetY = e.clientY - logPanel.offsetTop;
-        });
-
-        document.addEventListener("mousemove", (e) => {
-            if (isDragging) {
-                logPanel.style.left = (e.clientX - dragOffsetX) + "px";
-                logPanel.style.top = (e.clientY - dragOffsetY) + "px";
-                logPanel.style.right = "auto";
-                logPanel.style.bottom = "auto";
-            }
-        });
-
-        document.addEventListener("mouseup", () => {
-            isDragging = false;
-        });
-
-        // =====================================================================
-        // DEBUG: Log when extension is loaded
-        // =====================================================================
-        
-        console.log("[FLUX Monitor] Extension loaded successfully");
+        console.log("%c[FLUX Monitor] Ready and Listening!", "color: lime; font-weight: bold; font-size: 12px;");
     }
 });

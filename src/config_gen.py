@@ -143,8 +143,10 @@ class Flux2_8GB_Configurator:
 
         # IMPORTANT: On Windows, calling accelerate as a module is more reliable
         # than calling it as a command-line tool directly
+        # CRITICAL: Add -u flag for unbuffered output so logs stream in real-time
         cmd = [
             python_exe,
+            "-u",  # Unbuffered output - IMPORTANT for real-time logs!
             "-m", "accelerate.commands.launch",  # Run accelerate as module
             "--mixed_precision=bf16",
             "--num_cpu_threads_per_process=2",

@@ -52,7 +52,14 @@ class TrainingProcessManager:
             RuntimeError: If training is already running
         """
         if self.process and self.process.poll() is None:
-            raise RuntimeError("Training is already running!")
+            msg = "[FLUX-TRAIN] Warning: Process already running. Stop it first."
+            print(msg)
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": msg})
+                except Exception:
+                    pass
+            return
 
         self.stop_event.clear()
         self.log_lines = []
@@ -60,64 +67,93 @@ class TrainingProcessManager:
         # Environment setup for Ampere GPU (RTX 3060 Ti, RTX 4000 series, etc.)
         env = os.environ.copy()
         env["ACCELERATE_MIXED_PRECISION"] = "bf16"
+        env["PYTHONIOENCODING"] = "utf-8"  # CRITICAL for Windows console output
 
         # Windows-specific: Create new console group to allow clean termination
         creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
 
-        # Launch subprocess with isolated I/O
-        self.process = subprocess.Popen(
-            cmd_list,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-            bufsize=1,
-            universal_newlines=True,
-            creationflags=creationflags
-        )
+        try:
+            # Launch subprocess with isolated I/O
+            self.process = subprocess.Popen(
+                cmd_list,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                bufsize=1,
+                universal_newlines=True,
+                creationflags=creationflags
+            )
 
-        # Start log reader in daemon thread
-        log_thread = threading.Thread(target=self._log_reader, daemon=True)
-        log_thread.start()
+            # Send startup messages
+            startup_msg = "--- TRAINING PROCESS STARTED ---"
+            print(f"[FLUX-TRAIN] {startup_msg}")
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": startup_msg})
+                    PromptServer.instance.send_sync("flux_train_log", {"line": f"Command: {' '.join(cmd_list)}"})
+                except Exception as e:
+                    print(f"[FLUX-TRAIN] Warning: Could not send startup message: {e}")
+
+            # Start log reader in daemon thread
+            log_thread = threading.Thread(target=self._log_reader, daemon=True)
+            log_thread.start()
+            
+        except Exception as e:
+            err_msg = f"FAILED TO START PROCESS: {str(e)}"
+            print(f"[FLUX-TRAIN] {err_msg}")
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": err_msg})
+                except Exception:
+                    pass
+            raise
 
     def _log_reader(self) -> None:
         """
-        Reads stdout from subprocess and forwards to ComfyUI WebSocket.
-        Sends logs to browser interface in real-time.
-        Runs in separate thread to avoid blocking.
+        Reads stdout from subprocess and forwards to ComfyUI browser interface.
+        Runs in separate thread to avoid blocking main ComfyUI process.
         """
         try:
-            while True:
-                # Read one line from stdout (blocking operation in thread)
-                line = self.process.stdout.readline()
+            while self.process and self.process.poll() is None:
+                if self.process.stdout:
+                    line = self.process.stdout.readline()
+                    
+                    # If line is empty and process ended, break
+                    if not line and self.process.poll() is not None:
+                        break
+                        
+                    if line:
+                        clean_line = line.rstrip("\n\r")
+                        self.log_lines.append(clean_line)
 
-                # If line is empty and process finished, exit
-                if not line and self.process.poll() is not None:
-                    break
+                        # Limit in-memory log size
+                        if len(self.log_lines) > 500:
+                            self.log_lines = self.log_lines[-300:]
 
-                if line:
-                    clean_line = line.strip()
-                    self.log_lines.append(clean_line)
+                        # Print to server console (for debugging)
+                        print(f"[FLUX-TRAIN] {clean_line}")
 
-                    # Limit in-memory log size
-                    if len(self.log_lines) > 500:
-                        self.log_lines = self.log_lines[-300:]
-
-                    # 1. Print to server console (for debugging)
-                    print(f"[FLUX-TRAIN] {clean_line}")
-
-                    # 2. Send to browser via WebSocket
-                    # 'flux_train_log' is the event name caught by JS extension
-                    if PromptServer:
-                        try:
-                            PromptServer.instance.send_sync(
-                                "flux_train_log",
-                                {"line": clean_line, "timestamp": time.time()}
-                            )
-                        except Exception as e:
-                            # Silently fail if server not available
-                            print(f"[FLUX-TRAIN] WebSocket send error: {e}")
+                        # Send to browser UI via WebSocket
+                        if PromptServer:
+                            try:
+                                PromptServer.instance.send_sync(
+                                    "flux_train_log",
+                                    {"line": clean_line}
+                                )
+                            except Exception as e:
+                                print(f"[FLUX-TRAIN] Warning: Could not send log: {e}")
+                    else:
+                        time.sleep(0.01)  # Small sleep if no data
+        except Exception as e:
+            err_msg = f"Error in log reader: {e}"
+            print(f"[FLUX-TRAIN] {err_msg}")
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": err_msg})
+                except Exception:
+                    pass
 
                 time.sleep(0.01)  # Small sleep to prevent busy-waiting
 
