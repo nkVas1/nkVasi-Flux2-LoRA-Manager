@@ -70,37 +70,59 @@ class TrainingProcessManager:
         env["ACCELERATE_MIXED_PRECISION"] = "bf16"
         env["PYTHONIOENCODING"] = "utf-8"  # CRITICAL for Windows console output
 
-        # === FIX: ULTIMATE PYTHONPATH solution for 'library' module discovery ===
-        # Problem: accelerate might spawn child process that ignores/resets PYTHONPATH
-        # Solution: Aggressively add all relevant paths with absolute paths
-        script_dir = cwd  # Default to provided CWD
+        # === FIX: RELATIVE PATH STRATEGY for reliable 'library' module discovery ===
+        # Problem: accelerate may spawn child processes that ignore/lose PYTHONPATH
+        # Solution: Run process from sd-scripts directory with relative script name
+        # This ensures Python's working directory is where 'library' module exists
         
-        # 1. Find script directory from cmd_list (this is sd-scripts root)
+        script_dir = cwd  # Default fallback
+        
+        # 1. Try to find sd-scripts directory from cmd_list or common paths
+        # First, check if any argument is a full path ending with .py
         for arg in cmd_list:
             if isinstance(arg, str) and arg.endswith(".py") and os.path.exists(arg):
-                # Found the script! Use its absolute directory path
+                # Found full path to script! Use its directory
                 script_dir = os.path.dirname(os.path.abspath(arg))
                 break
+        else:
+            # Script name is relative (just "flux_train_network.py")
+            # Try to find sd-scripts in common locations
+            possible_paths = [
+                cwd,  # Assume cwd is sd-scripts
+                os.path.join(cwd, "sd-scripts"),  # Or in a subdirectory
+                os.path.join(cwd, "kohya_train", "kohya_ss", "sd-scripts"),  # Common ComfyUI layout
+                os.path.join(cwd, "custom_nodes", "ComfyUI-Flux2-LoRA-Manager", "sd-scripts"),  # Alternative
+            ]
+            
+            for possible_path in possible_paths:
+                if os.path.exists(os.path.join(possible_path, "library")):
+                    # Found it! This directory has 'library' folder
+                    script_dir = possible_path
+                    break
         
-        # 2. Get current PYTHONPATH
+        # 2. Set up PYTHONPATH as fallback (belt and suspenders approach)
         current_pythonpath = env.get("PYTHONPATH", "")
         
-        # 3. Build new PYTHONPATH with both script_dir and cwd
-        # CRITICAL: Add script_dir FIRST (highest priority)
-        # On Windows, os.pathsep is ';', on Unix it's ':'
-        new_pythonpath = f"{script_dir}{os.pathsep}{cwd}{os.pathsep}{current_pythonpath}"
+        # Add both script_dir and cwd, with script_dir first (highest priority)
+        pythonpath_parts = [script_dir, cwd, current_pythonpath]
+        # Filter out empty strings and duplicates
+        pythonpath_parts = [p for p in pythonpath_parts if p]
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
         
-        # Remove duplicate/empty path separators
-        env["PYTHONPATH"] = new_pythonpath.strip(os.pathsep)
+        # Debug: Log the working directory and PYTHONPATH (helps troubleshooting)
+        debug_lines = [
+            f"Working Dir: {script_dir}",
+            f"PYTHONPATH: {env['PYTHONPATH']}",
+            f"Looking for: {os.path.join(script_dir, 'library')}",
+        ]
         
-        # Debug: Log the PYTHONPATH we're setting (helps troubleshooting)
-        debug_msg = f"PYTHONPATH set to: {env['PYTHONPATH']}"
-        print(f"[DEBUG] {debug_msg}")
-        if PromptServer:
-            try:
-                PromptServer.instance.send_sync("flux_train_log", {"line": f"DEBUG: {debug_msg}"})
-            except Exception:
-                pass
+        for debug_msg in debug_lines:
+            print(f"[DEBUG] {debug_msg}")
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": f"DEBUG: {debug_msg}"})
+                except Exception:
+                    pass
         # ========================================================================
 
         # Windows-specific: Create new console group to allow clean termination
@@ -108,9 +130,11 @@ class TrainingProcessManager:
 
         try:
             # Launch subprocess with isolated I/O
+            # CRITICAL: Run from sd-scripts directory so relative script name resolves
+            # and so Python can find 'library' module in current working directory
             self.process = subprocess.Popen(
                 cmd_list,
-                cwd=script_dir,  # Run from script directory for module imports
+                cwd=script_dir,  # This MUST be sd-scripts directory!
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

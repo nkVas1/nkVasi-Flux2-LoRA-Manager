@@ -145,6 +145,12 @@ class Flux2_8GB_Configurator:
         # 4. Build command arguments optimized for RTX 3060 Ti (8GB)
         # CRITICAL FOR WINDOWS: Pass command as JSON list, NOT as string
         # This preserves backslashes in paths (G:\ComfyUI\... won't get mangled)
+        # 
+        # KEY FIX: Use relative script name (just filename) instead of full path
+        # When process.py runs from sd-scripts directory, Python will find flux_train_network.py
+        # This ensures accelerate and Python's import system properly register the working directory
+        script_name = "flux_train_network.py"
+        
         cmd = [
             python_exe,
             "-u",  # Unbuffered output - IMPORTANT for real-time logs!
@@ -152,7 +158,7 @@ class Flux2_8GB_Configurator:
             "--num_processes=1",  # Explicitly use 1 process (avoid child process PYTHONPATH issues)
             "--mixed_precision=bf16",
             "--num_cpu_threads_per_process=2",
-            script_path,
+            script_name,
             "--pretrained_model_name_or_path", model_path,
             "--dataset_config", toml_path,
             "--output_dir", output_dir,
