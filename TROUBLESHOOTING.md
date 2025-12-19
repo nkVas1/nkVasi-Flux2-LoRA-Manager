@@ -12,6 +12,86 @@ print_environment_report()
 
 ---
 
+## Error: "cannot import name 'GenerationMixin' from 'transformers.generation'"
+
+### Root Cause
+Version mismatch between ComfyUI's transformers and sd-scripts requirements.
+
+### Solution: Virtual Environment (Automatic - v1.4+)
+
+**v1.4+ uses isolated training environment to prevent version conflicts.**
+
+#### First-time Setup:
+```bash
+cd G:\ComfyUI-StableDif-t27-p312-cu128-v2.1\ComfyUI\custom_nodes\ComfyUI-Flux2-LoRA-Manager
+python setup_training_env.py
+```
+
+This creates `training_venv` folder with exact dependency versions:
+- `transformers==4.36.2` (compatible with GenerationMixin)
+- `diffusers==0.25.0`
+- `accelerate==0.25.0`
+- All other dependencies pinned to compatible versions
+
+#### If Error Persists:
+
+1. **Force recreate environment:**
+   ```bash
+   python setup_training_env.py --force
+   ```
+
+2. **Manual cleanup:**
+   ```bash
+   # Delete old venv
+   rmdir /s training_venv
+   
+   # Recreate
+   python setup_training_env.py
+   ```
+
+3. **Verify installation:**
+   ```python
+   from src.venv_manager import VirtualEnvManager
+   manager = VirtualEnvManager()
+   all_ok, messages = manager.verify_installation()
+   for msg in messages:
+       print(msg)
+   ```
+
+### How It Works
+
+The plugin now uses **two separate Python environments**:
+
+1. **ComfyUI Environment** (main):
+   - Used for UI and workflow execution
+   - Has its own dependency versions
+   
+2. **Training Environment** (isolated):
+   - Used ONLY for training process
+   - Has exact versions required by sd-scripts
+   - Created in `training_venv/` folder
+   - Automatically created on first training run
+
+When you start training:
+1. Plugin checks if `training_venv` exists
+2. If not, creates it automatically (first run only)
+3. Replaces Python executable in command with venv Python
+4. Training runs in isolated environment
+
+This eliminates **ALL** version conflict issues.
+
+### Package Versions in Training Environment
+
+| Package | Version | Reason |
+|---------|---------|--------|
+| torch | 2.1.0 | Stable for CUDA 12.1 |
+| transformers | 4.36.2 | Has GenerationMixin |
+| diffusers | 0.25.0 | Compatible with transformers |
+| accelerate | 0.25.0 | Multi-GPU support |
+| safetensors | 0.4.1 | Safe model loading |
+
+---
+
 ## Error: "Python.h not found" / Triton compilation failure
 
 ### Root Cause

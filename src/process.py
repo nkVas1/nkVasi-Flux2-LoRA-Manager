@@ -11,6 +11,9 @@ import shlex
 import time
 from typing import Optional, List
 
+# Virtual environment management
+from .venv_manager import VirtualEnvManager, ensure_training_venv
+
 # ComfyUI imports (graceful fallback if not available)
 try:
     from server import PromptServer
@@ -86,6 +89,55 @@ class TrainingProcessManager:
             print("[FLUX-TRAIN] Environment checker not available, skipping pre-flight check")
         # =====================================
         
+        # === VIRTUAL ENVIRONMENT SETUP ===
+        print("[FLUX-TRAIN] Ensuring training virtual environment...")
+        if PromptServer:
+            try:
+                PromptServer.instance.send_sync("flux_train_log", {"line": "Checking training environment..."})
+            except Exception:
+                pass
+        
+        # Get plugin base directory
+        plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        venv_python = None
+        try:
+            # Ensure venv exists and is ready
+            success, msg, venv_python = ensure_training_venv(plugin_dir)
+            
+            if not success:
+                error_msg = f"Failed to setup training environment: {msg}"
+                print(f"[FLUX-TRAIN] {error_msg}")
+                if PromptServer:
+                    try:
+                        PromptServer.instance.send_sync("flux_train_log", {"line": error_msg})
+                        PromptServer.instance.send_sync("flux_train_log", {"line": "Try: Delete training_venv folder and restart"})
+                    except Exception:
+                        pass
+                raise RuntimeError(error_msg)
+            
+            print(f"[FLUX-TRAIN] ✓ {msg}")
+            print(f"[FLUX-TRAIN] Using Python: {venv_python}")
+            
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": f"✓ {msg}"})
+                    PromptServer.instance.send_sync("flux_train_log", {"line": "Using isolated Python environment"})
+                except Exception:
+                    pass
+        
+        except Exception as e:
+            error_msg = f"Virtual environment error: {e}"
+            print(f"[FLUX-TRAIN] {error_msg}")
+            if PromptServer:
+                try:
+                    PromptServer.instance.send_sync("flux_train_log", {"line": error_msg})
+                except Exception:
+                    pass
+            # Continue with original Python (fallback)
+            print("[FLUX-TRAIN] Falling back to system Python (may have version conflicts)")
+        # ==================================
+        
         if self.process and self.process.poll() is None:
             msg = "[FLUX-TRAIN] Warning: Process already running. Stop it first."
             print(msg)
@@ -117,6 +169,12 @@ class TrainingProcessManager:
         # Prevent diffusers from trying to compile C extensions
         env["DIFFUSERS_DISABLE_TELEMETRY"] = "1"
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        
+        # Use venv Python if available
+        if venv_python and os.path.exists(venv_python):
+            print(f"[FLUX-TRAIN] Replacing Python with venv: {venv_python}")
+            if len(cmd_list) > 0 and cmd_list[0].endswith(('python.exe', 'python')):
+                cmd_list[0] = venv_python
 
         # === ULTIMATE FIX: Wrapper script to guarantee library module discovery ===
         # Problem: accelerate subprocess loses parent's sys.path and cwd context
@@ -125,7 +183,6 @@ class TrainingProcessManager:
         script_dir = cwd  # Default fallback
         script_name = None
         original_script_path = None
-        
         # 1. Find sd-scripts directory and original script path
         # First, extract script name and check if full path is provided
         for arg in cmd_list:

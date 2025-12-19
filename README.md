@@ -49,26 +49,73 @@ Unlike standard training nodes that crash ComfyUI by sharing memory, this extens
 
 3.  **Hardware**: NVIDIA GPU with at least **8GB VRAM** (recommended: RTX 3060 Ti or better).
 
-4.  **Dependencies**:
-    ```bash
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-    pip install accelerate transformers diffusers safetensors bitsandbytes
-    ```
-
 ## 📦 Installation
 
-1.  Clone this repository into your ComfyUI `custom_nodes` folder:
-    ```bash
-    cd ComfyUI/custom_nodes/
-    git clone https://github.com/YOUR_USERNAME/ComfyUI-Flux2-LoRA-Manager.git
-    ```
+### Quick Setup (Recommended)
 
-2.  Install Python dependencies:
-    ```bash
-    pip install -r ComfyUI-Flux2-LoRA-Manager/requirements.txt
-    ```
+1. **Install the plugin:**
+   ```bash
+   cd G:\ComfyUI-StableDif-t27-p312-cu128-v2.1\ComfyUI\custom_nodes
+   git clone https://github.com/nkVasi/ComfyUI-Flux2-LoRA-Manager.git
+   ```
 
-3.  **Restart ComfyUI** (node registration requires a restart).
+2. **Setup training environment:**
+   ```bash
+   cd ComfyUI-Flux2-LoRA-Manager
+   python setup_training_env.py
+   ```
+   
+   This creates an isolated Python environment with correct dependency versions.
+   Typical time: 5-10 minutes (downloads ~2GB).
+
+3. **Place sd-scripts:**
+   ```
+   G:\ComfyUI-StableDif-t27-p312-cu128-v2.1\
+   └── ComfyUI\
+       └── kohya_train\
+           └── kohya_ss\
+               └── sd-scripts\    ← Clone here
+   ```
+
+4. **Restart ComfyUI and refresh browser**
+
+### Manual Setup (Advanced)
+
+If automatic setup fails:
+
+1. Create venv manually:
+   ```bash
+   python -m venv training_venv
+   training_venv\Scripts\activate
+   ```
+
+2. Install requirements:
+   ```bash
+   pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121
+   pip install transformers==4.36.2 diffusers==0.25.0 accelerate==0.25.0
+   ```
+
+3. Verify installation:
+   ```bash
+   python -c "import torch; print(torch.cuda.is_available())"
+   python -c "from transformers import CLIPTextModel; print('OK')"
+   ```
+
+### Troubleshooting Setup
+
+**"Failed to create venv":**
+- Ensure Python 3.10-3.11 installed
+- Run as administrator (Windows)
+- Check disk space (need 5GB+)
+
+**"Package installation timeout":**
+- Check internet connection
+- Use VPN if PyPI blocked
+- Try: `python setup_training_env.py` again
+
+**"ImportError: GenerationMixin":**
+- This is fixed by venv isolation
+- If error persists: `python setup_training_env.py --force`
 
 ## 🧩 Usage Workflow
 
