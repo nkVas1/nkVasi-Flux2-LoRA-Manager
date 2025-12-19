@@ -1,3 +1,61 @@
+# v1.5.1 - Critical Infinite Loop Fix in Runner/Stopper Nodes (2025-01)
+
+## 🔴 CRITICAL BUG FIX
+
+Fixed catastrophic infinite loop where `OUTPUT_NODE = True` nodes were auto-executing on every workflow refresh, causing:
+- ComfyUI UI frozen with "Prompt executed in 0.01 sec" spam
+- Training process not actually starting
+- Dataset.toml changing size repeatedly
+
+### Root Cause
+`OUTPUT_NODE = True` nodes execute on every input change. Previous logic returned different status even when nothing changed → ComfyUI infinitely re-executed workflow.
+
+### Solution Implemented
+Changed execution logic so nodes return **stateless status** when `trigger=False` and `stop=False`, preventing auto-re-execution.
+
+## 📝 Что изменилось (What Changed)
+
+**File: `src/process.py`**
+
+### Flux2_Runner
+```python
+# OLD (causes infinite loop)
+if not trigger:
+    return "Waiting..."  # Different status each time → re-execute
+
+# NEW (prevents loop)
+if not trigger:
+    if manager.is_running():
+        return "Training in progress..."  # Same status → no re-execute
+    else:
+        return "Ready. Set trigger=True"  # Same status → no re-execute
+```
+
+### Flux2_Stopper
+```python
+# OLD (redundant execution)
+if stop and manager.is_running():
+    manager.stop_training()
+
+# NEW (no side effects when stop=False)
+if not stop:
+    return status_only  # No execution, just status
+if stop:
+    manager.stop_training()  # Execute only when True
+```
+
+## ✅ Verification
+
+**Before**: Every workflow refresh = 50+ node executions/second
+**After**: Single execution per "Queue Prompt" click
+
+Test:
+1. Set `trigger=False`
+2. Click "Queue Prompt" 5 times
+3. Should see "Ready" message, NOT infinite "Prompt executed" spam ✅
+
+---
+
 # v1.5.0 - Embedded Python Support via pip install --target (2025-01)
 
 ## 🎯 Главное улучшение

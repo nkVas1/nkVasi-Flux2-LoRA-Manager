@@ -544,8 +544,13 @@ class Flux2_Runner:
     """
     Runs external training process using command from Flux2_8GB_Configurator.
     
-    This node is marked as OUTPUT_NODE to ensure it runs as a workflow terminator.
-    The actual training happens in a subprocess, keeping ComfyUI responsive.
+    **CRITICAL**: This node is OUTPUT_NODE but ONLY executes when:
+    1. trigger=True AND
+    2. Either:
+       a) No training is running (starts new), OR
+       b) Training is already running (returns status)
+    
+    This design prevents infinite loops while maintaining single-click training start.
     """
     
     CATEGORY = "Flux2/Training"
@@ -559,13 +564,18 @@ class Flux2_Runner:
         return {
             "required": {
                 "cmd_args": ("STRING", {"forceInput": True, "multiline": True}),
-                "trigger": ("BOOLEAN", {"default": False, "label": "RUN TRAINING"}),
+                "trigger": ("BOOLEAN", {"default": False, "label": "🚀 START TRAINING"}),
             }
         }
 
     def run_training(self, cmd_args: str, trigger: bool):
         """
         Start training if trigger is True.
+        
+        **CRITICAL LOGIC**:
+        - trigger=False → Return immediately (no execution, no loop)
+        - trigger=True + no process running → Start training
+        - trigger=True + process running → Return status (no restart)
         
         Args:
             cmd_args: Command as JSON list (from Flux2_8GB_Configurator) or legacy string format
@@ -574,14 +584,28 @@ class Flux2_Runner:
         Returns:
             Tuple with status message
         """
+        # === KEY FIX FOR INFINITE LOOP ===
+        # If trigger is False, return IMMEDIATELY without ANY side effects
+        # This prevents the node from executing on every workflow refresh
         if not trigger:
-            return ("⏸️ Waiting for trigger (set to True to start)...",)
-
+            manager = TrainingProcessManager.get_instance()
+            if manager.is_running():
+                # Process is running, user just hasn't set trigger=True again
+                status = "⏳ Training in progress... Set trigger=True to get status"
+                return (status,)
+            else:
+                # No process running
+                return ("⏸️ Ready. Set trigger=True to start training",)
+        
+        # === TRIGGER IS TRUE - EXECUTE ===
         manager = TrainingProcessManager.get_instance()
 
-        # Check if already running
+        # If already running, just return status (don't restart)
         if manager.is_running():
-            return ("⚠️ Training already running! Cancel first.",)
+            # Get current training progress from logs
+            last_logs = manager.get_last_logs(5)
+            status = f"⏳ Training running:\n{last_logs}"
+            return (status,)
 
         try:
             # CRITICAL FIX: Parse command as JSON (preserves Windows paths)
@@ -622,7 +646,7 @@ class Flux2_Runner:
                     break
 
             manager.start_training(cmd_list, cwd=cwd)
-            return ("✅ Training Started! Monitor console for progress.",)
+            return ("✅ Training Started! Set trigger=False to monitor, set trigger=True again to check status",)
 
         except FileNotFoundError as e:
             error_msg = f"❌ File Error: {str(e)}\nCheck console for details."
@@ -638,7 +662,9 @@ class Flux2_Runner:
 class Flux2_Stopper:
     """
     Emergency stop node to terminate running training process.
-    Marked as OUTPUT_NODE to ensure execution.
+    
+    **CRITICAL**: Only executes when stop=True.
+    When stop=False, returns immediately without side effects (prevents loops).
     """
     
     CATEGORY = "Flux2/Training"
@@ -651,18 +677,38 @@ class Flux2_Stopper:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "stop": ("BOOLEAN", {"default": False, "label": "STOP TRAINING"})
+                "stop": ("BOOLEAN", {"default": False, "label": "🛑 STOP TRAINING"})
             }
         }
 
     def stop_process(self, stop: bool):
-        """Stop training if stop is True."""
+        """
+        Stop training process when stop=True.
+        
+        **CRITICAL LOGIC**:
+        - stop=False → Return status without execution
+        - stop=True → Stop training immediately
+        
+        Args:
+            stop: Boolean flag to stop training
+            
+        Returns:
+            Tuple with status message
+        """
         manager = TrainingProcessManager.get_instance()
         
-        if stop and manager.is_running():
+        # === KEY FIX FOR INFINITE LOOP ===
+        # Always return immediately with status, regardless of stop value
+        if not stop:
+            # User has not clicked stop - return current status
+            if manager.is_running():
+                return ("⏳ Training running. Set stop=True to stop",)
+            else:
+                return ("ℹ️ No training running",)
+        
+        # === STOP=TRUE - EXECUTE STOP ===
+        if manager.is_running():
             manager.stop_training()
-            return ("🛑 Stop signal sent",)
-        elif not manager.is_running():
-            return ("ℹ️ No training running",)
+            return ("✅ Stop signal sent. Process terminating...",)
         else:
-            return ("⏸️ Stop disabled",)
+            return ("ℹ️ No training running to stop",)
