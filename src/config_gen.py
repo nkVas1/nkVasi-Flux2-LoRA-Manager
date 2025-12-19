@@ -128,22 +128,23 @@ class Flux2_8GB_Configurator:
             with open(toml_path, "w", encoding='utf-8') as f:
                 json.dump(dataset_config, f, indent=2)
 
-        # 2. Validate script path
+        # 2. Validate script path BEFORE attempting to build command
         script_path = os.path.join(sd_scripts_path, "flux_train_network.py")
         if not os.path.exists(script_path):
-            raise FileNotFoundError(
-                f"Kohya script not found at: {script_path}\n"
-                f"Please ensure 'sd-scripts' is installed at the specified path."
-            )
+            error_msg = f"ERROR: Script not found at: {script_path}\nEnsure 'sd-scripts' is installed at: {sd_scripts_path}"
+            return (error_msg, "", "")
 
-        # 3. Build command arguments optimized for RTX 3060 Ti (8GB)
-        # Get absolute path to current Python interpreter (critical for Windows)
+        # 3. Validate Python interpreter exists (critical for Windows subprocess)
         import sys
         python_exe = sys.executable
+        
+        if not os.path.exists(python_exe):
+            error_msg = f"ERROR: Python interpreter not found at: {python_exe}"
+            return (error_msg, "", "")
 
-        # IMPORTANT: On Windows, calling accelerate as a module is more reliable
-        # than calling it as a command-line tool directly
-        # CRITICAL: Add -u flag for unbuffered output so logs stream in real-time
+        # 4. Build command arguments optimized for RTX 3060 Ti (8GB)
+        # CRITICAL FOR WINDOWS: Pass command as JSON list, NOT as string
+        # This preserves backslashes in paths (G:\ComfyUI\... won't get mangled)
         cmd = [
             python_exe,
             "-u",  # Unbuffered output - IMPORTANT for real-time logs!
@@ -176,4 +177,9 @@ class Flux2_8GB_Configurator:
         # Remove empty strings from command
         cmd = [arg for arg in cmd if arg]
 
-        return (" ".join(cmd), json.dumps(dataset_config, indent=2, ensure_ascii=False), output_dir)
+        # CRITICAL: Return command as JSON, not as string
+        # This preserves Windows paths with backslashes
+        # Runner will parse it as JSON and use it as a list directly
+        cmd_json = json.dumps(cmd, ensure_ascii=False)
+        
+        return (cmd_json, json.dumps(dataset_config, indent=2, ensure_ascii=False), output_dir)

@@ -3,6 +3,7 @@ Process Management for External Training Execution
 Handles subprocess lifecycle, logging, and UI communication
 """
 
+import json
 import threading
 import subprocess
 import os
@@ -237,7 +238,7 @@ class Flux2_Runner:
         Start training if trigger is True.
         
         Args:
-            cmd_args: Command string from Flux2_8GB_Configurator
+            cmd_args: Command as JSON list (from Flux2_8GB_Configurator) or legacy string format
             trigger: Boolean flag to start training
             
         Returns:
@@ -253,14 +254,28 @@ class Flux2_Runner:
             return ("⚠️ Training already running! Cancel first.",)
 
         try:
-            # Parse command string safely
-            cmd_list = shlex.split(cmd_args)
+            # CRITICAL FIX: Parse command as JSON (preserves Windows paths)
+            # This avoids shlex.split() mangling backslashes on Windows
+            cmd_list = []
+            
+            try:
+                # Try JSON format first (v1.2+ format with path preservation)
+                cmd_list = json.loads(cmd_args)
+                if not isinstance(cmd_list, list):
+                    raise ValueError("JSON is not a list")
+            except (json.JSONDecodeError, ValueError):
+                # Fallback: Parse as string for backward compatibility
+                print("[FLUX-TRAIN] Warning: Using legacy string parsing (may fail on Windows paths)")
+                cmd_list = shlex.split(cmd_args)
+
+            if not cmd_list or not isinstance(cmd_list, list):
+                return ("❌ Error: Invalid command format",)
 
             # Infer working directory from script path
-            # Usually: accelerate launch ... /path/to/script.py ...
+            # Script path should be in cmd_list (usually the 5th argument after python, -u, -m, accelerate, ...)
             cwd = os.getcwd()
-            for i, arg in enumerate(cmd_list):
-                if arg.endswith(".py"):
+            for arg in cmd_list:
+                if isinstance(arg, str) and arg.endswith(".py") and os.path.exists(arg):
                     cwd = os.path.dirname(arg) or os.getcwd()
                     break
 
