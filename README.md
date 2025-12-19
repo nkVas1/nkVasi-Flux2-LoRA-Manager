@@ -59,13 +59,14 @@ Unlike standard training nodes that crash ComfyUI by sharing memory, this extens
    git clone https://github.com/nkVasi/ComfyUI-Flux2-LoRA-Manager.git
    ```
 
-2. **Setup training environment:**
+2. **Setup training packages:**
    ```bash
    cd ComfyUI-Flux2-LoRA-Manager
    python setup_training_env.py
    ```
    
-   This creates an isolated Python environment with correct dependency versions.
+   This creates `training_libs/` with correct dependency versions.
+   Works with embedded Python (no venv needed).
    Typical time: 5-10 minutes (downloads ~2GB).
 
 3. **Place sd-scripts:**
@@ -83,21 +84,21 @@ Unlike standard training nodes that crash ComfyUI by sharing memory, this extens
 
 If automatic setup fails:
 
-1. Create venv manually:
+1. Create package directory manually:
    ```bash
-   python -m venv training_venv
-   training_venv\Scripts\activate
+   mkdir training_libs
    ```
 
 2. Install requirements:
    ```bash
-   pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121
-   pip install transformers==4.36.2 diffusers==0.25.0 accelerate==0.25.0
+   python -m pip install torch==2.1.2+cu121 torchvision==0.16.2+cu121 --target training_libs --index-url https://download.pytorch.org/whl/cu121
+   python -m pip install transformers==4.36.2 diffusers==0.25.1 accelerate==0.25.0 --target training_libs
    ```
 
 3. Verify installation:
    ```bash
-   python -c "import torch; print(torch.cuda.is_available())"
+   python -c "import sys; sys.path.insert(0, 'training_libs'); import torch; print(torch.cuda.is_available())"
+````
    python -c "from transformers import CLIPTextModel; print('OK')"
    ```
 

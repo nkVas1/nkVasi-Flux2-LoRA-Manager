@@ -1,8 +1,8 @@
 """
-Virtual Environment Manager for Training Isolation
+Standalone Package Manager for Training Isolation (Embedded Python Compatible)
 
-Создает и управляет изолированным Python окружением для обучения,
-предотвращая конфликты версий библиотек между ComfyUI и sd-scripts.
+Since embedded Python lacks 'venv' module, we use direct pip install
+into a separate directory and manipulate sys.path instead.
 """
 
 import os
@@ -11,136 +11,109 @@ import subprocess
 import json
 import shutil
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 
 
-class VirtualEnvManager:
+class StandalonePackageManager:
     """
-    Manages isolated Python environments for training.
-    Prevents version conflicts between ComfyUI and sd-scripts dependencies.
+    Manages isolated package directory for training without using venv.
+    Compatible with embedded Python.
     """
     
     # Exact versions that work with sd-scripts
     TRAINING_REQUIREMENTS = {
-        'torch': '2.1.0',
-        'torchvision': '0.16.0',
-        'transformers': '4.36.2',  # Совместима с GenerationMixin
-        'diffusers': '0.25.0',
+        'torch': '2.1.2+cu121',
+        'torchvision': '0.16.2+cu121',
+        'transformers': '4.36.2',
+        'diffusers': '0.25.1',
         'accelerate': '0.25.0',
-        'safetensors': '0.4.1',
+        'safetensors': '0.4.2',
         'toml': '0.10.2',
         'omegaconf': '2.3.0',
         'einops': '0.7.0',
-        'prodigyopt': '1.0',
-        'lycoris-lora': '1.9.0',
+        'peft': '0.7.1',
+        'bitsandbytes': '0.41.3',  # Will be blocked by import_blocker
     }
     
     def __init__(self, base_dir: Optional[str] = None):
-        """
-        Initialize VirtualEnvManager.
-        
-        Args:
-            base_dir: Base directory for venvs (defaults to plugin directory)
-        """
+        """Initialize StandalonePackageManager."""
         if base_dir is None:
-            # Use plugin directory by default
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
         self.base_dir = Path(base_dir)
-        self.venv_dir = self.base_dir / "training_venv"
-        self.cache_file = self.venv_dir / ".venv_cache.json"
+        self.libs_dir = self.base_dir / "training_libs"
+        self.cache_file = self.libs_dir / ".install_cache.json"
         
-    def venv_exists(self) -> bool:
-        """Check if training venv exists and is valid."""
-        if not self.venv_dir.exists():
+    def libs_exist(self) -> bool:
+        """Check if training libs directory exists and has packages."""
+        if not self.libs_dir.exists():
             return False
         
-        # Check for Python executable
-        python_exe = self._get_venv_python()
-        if not os.path.exists(python_exe):
-            return False
-        
-        # Check cache file
+        # Check if cache file exists
         if not self.cache_file.exists():
             return False
         
-        return True
+        # Check if at least some packages are installed
+        site_packages = self.libs_dir
+        has_packages = any(site_packages.glob("*"))
+        
+        return has_packages
     
-    def _get_venv_python(self) -> str:
-        """Get path to Python executable in venv."""
-        if sys.platform == "win32":
-            return str(self.venv_dir / "Scripts" / "python.exe")
-        else:
-            return str(self.venv_dir / "bin" / "python")
+    def _get_python_exe(self) -> str:
+        """Get current Python executable."""
+        return sys.executable
     
-    def _get_venv_pip(self) -> str:
-        """Get path to pip executable in venv."""
-        if sys.platform == "win32":
-            return str(self.venv_dir / "Scripts" / "pip.exe")
-        else:
-            return str(self.venv_dir / "bin" / "pip")
-    
-    def create_venv(self, force: bool = False) -> Tuple[bool, str]:
+    def create_libs_dir(self, force: bool = False) -> Tuple[bool, str]:
         """
-        Create training virtual environment.
+        Create training libs directory.
         
         Args:
-            force: Force recreation if venv exists
+            force: Force recreation if exists
             
         Returns:
             (success, message)
         """
-        if self.venv_exists() and not force:
-            return True, "Virtual environment already exists"
+        if self.libs_exist() and not force:
+            return True, "Package directory already exists"
         
-        print("[VENV] Creating training virtual environment...")
+        print("[PKG-MGR] Creating training package directory...")
         
-        # Remove old venv if forcing
-        if force and self.venv_dir.exists():
-            print("[VENV] Removing old virtual environment...")
+        # Remove old directory if forcing
+        if force and self.libs_dir.exists():
+            print("[PKG-MGR] Removing old package directory...")
             try:
-                shutil.rmtree(self.venv_dir)
+                shutil.rmtree(self.libs_dir)
             except Exception as e:
-                return False, f"Failed to remove old venv: {e}"
+                return False, f"Failed to remove old directory: {e}"
         
-        # Create new venv
+        # Create new directory
         try:
-            # Use current Python to create venv
-            subprocess.run(
-                [sys.executable, "-m", "venv", str(self.venv_dir)],
-                check=True,
-                capture_output=True,
-                timeout=60
-            )
-        except subprocess.CalledProcessError as e:
-            return False, f"Failed to create venv: {e.stderr.decode()}"
+            self.libs_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[PKG-MGR] Created directory: {self.libs_dir}")
         except Exception as e:
-            return False, f"Failed to create venv: {e}"
+            return False, f"Failed to create directory: {e}"
         
-        print("[VENV] Virtual environment created successfully")
-        return True, "Virtual environment created"
+        return True, "Package directory created"
     
-    def install_requirements(self, progress_callback=None) -> Tuple[bool, List[str]]:
+    def install_packages(self, progress_callback=None) -> Tuple[bool, List[str]]:
         """
-        Install training requirements in venv.
+        Install training requirements directly into libs directory.
         
         Args:
-            progress_callback: Optional callback(package_name, status) for progress updates
+            progress_callback: Optional callback(package_name, status)
             
         Returns:
             (success, list_of_errors)
         """
-        if not self.venv_exists():
-            return False, ["Virtual environment does not exist"]
+        if not self.libs_dir.exists():
+            return False, ["Package directory does not exist"]
         
-        python_exe = self._get_venv_python()
-        pip_exe = self._get_venv_pip()
-        
+        python_exe = self._get_python_exe()
         errors = []
         installed = []
         
         # Upgrade pip first
-        print("[VENV] Upgrading pip...")
+        print("[PKG-MGR] Ensuring pip is up to date...")
         try:
             subprocess.run(
                 [python_exe, "-m", "pip", "install", "--upgrade", "pip"],
@@ -149,37 +122,48 @@ class VirtualEnvManager:
                 timeout=120
             )
         except Exception as e:
-            errors.append(f"Failed to upgrade pip: {e}")
+            print(f"[PKG-MGR] Warning: Could not upgrade pip: {e}")
         
-        # Install PyTorch first (special handling for CUDA)
-        print("[VENV] Installing PyTorch with CUDA support...")
-        torch_version = self.TRAINING_REQUIREMENTS['torch']
-        torchvision_version = self.TRAINING_REQUIREMENTS['torchvision']
+        # Install PyTorch first (with CUDA)
+        print("[PKG-MGR] Installing PyTorch with CUDA support...")
+        torch_spec = f"torch=={self.TRAINING_REQUIREMENTS['torch']}"
+        torchvision_spec = f"torchvision=={self.TRAINING_REQUIREMENTS['torchvision']}"
         
         try:
             if progress_callback:
                 progress_callback("torch", "installing")
             
-            subprocess.run(
+            # Install to target directory
+            result = subprocess.run(
                 [
-                    pip_exe, "install",
-                    f"torch=={torch_version}",
-                    f"torchvision=={torchvision_version}",
+                    python_exe, "-m", "pip", "install",
+                    torch_spec, torchvision_spec,
+                    "--target", str(self.libs_dir),
                     "--index-url", "https://download.pytorch.org/whl/cu121",
+                    "--no-warn-script-location",
                 ],
-                check=True,
                 capture_output=True,
-                timeout=600  # 10 minutes for torch
+                text=True,
+                timeout=900  # 15 minutes for torch
             )
             
-            installed.append("torch")
-            installed.append("torchvision")
-            
+            if result.returncode == 0:
+                installed.extend(['torch', 'torchvision'])
+                print("[PKG-MGR] ✓ PyTorch installed")
+                if progress_callback:
+                    progress_callback("torch", "success")
+            else:
+                error_msg = f"torch: {result.stderr}"
+                errors.append(error_msg)
+                print(f"[PKG-MGR] ✗ PyTorch failed: {result.stderr}")
+                if progress_callback:
+                    progress_callback("torch", "failed")
+        except subprocess.TimeoutExpired:
+            errors.append("torch: Installation timeout (15 min)")
             if progress_callback:
-                progress_callback("torch", "success")
-        except subprocess.CalledProcessError as e:
-            error_msg = f"torch: {e.stderr.decode()}"
-            errors.append(error_msg)
+                progress_callback("torch", "timeout")
+        except Exception as e:
+            errors.append(f"torch: {e}")
             if progress_callback:
                 progress_callback("torch", "failed")
         
@@ -188,170 +172,222 @@ class VirtualEnvManager:
             if package in ['torch', 'torchvision']:
                 continue  # Already installed
             
-            print(f"[VENV] Installing {package}=={version}...")
+            # Skip bitsandbytes on Windows (causes issues)
+            if package == 'bitsandbytes' and sys.platform == 'win32':
+                print(f"[PKG-MGR] Skipping {package} (Windows compatibility)")
+                continue
+            
+            print(f"[PKG-MGR] Installing {package}=={version}...")
             
             try:
                 if progress_callback:
                     progress_callback(package, "installing")
                 
-                subprocess.run(
-                    [pip_exe, "install", f"{package}=={version}"],
-                    check=True,
+                # Remove +cu121 suffix for regular packages
+                clean_version = version.split('+')[0]
+                package_spec = f"{package}=={clean_version}"
+                
+                result = subprocess.run(
+                    [
+                        python_exe, "-m", "pip", "install",
+                        package_spec,
+                        "--target", str(self.libs_dir),
+                        "--no-warn-script-location",
+                    ],
                     capture_output=True,
+                    text=True,
                     timeout=300  # 5 minutes per package
                 )
                 
-                installed.append(package)
-                
+                if result.returncode == 0:
+                    installed.append(package)
+                    print(f"[PKG-MGR] ✓ {package} installed")
+                    if progress_callback:
+                        progress_callback(package, "success")
+                else:
+                    error_msg = f"{package}: {result.stderr}"
+                    errors.append(error_msg)
+                    print(f"[PKG-MGR] ✗ {package} failed")
+                    if progress_callback:
+                        progress_callback(package, "failed")
+                        
+            except subprocess.TimeoutExpired:
+                errors.append(f"{package}: Installation timeout")
                 if progress_callback:
-                    progress_callback(package, "success")
-            except subprocess.CalledProcessError as e:
-                error_msg = f"{package}: {e.stderr.decode()}"
-                errors.append(error_msg)
+                    progress_callback(package, "timeout")
+            except Exception as e:
+                errors.append(f"{package}: {e}")
                 if progress_callback:
                     progress_callback(package, "failed")
         
         # Save cache
         cache_data = {
             "installed_packages": installed,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "creation_timestamp": str(Path(self.venv_dir).stat().st_ctime),
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "python_executable": python_exe,
+            "libs_directory": str(self.libs_dir),
         }
         
         try:
             with open(self.cache_file, "w") as f:
                 json.dump(cache_data, f, indent=2)
         except Exception as e:
-            print(f"[VENV] Warning: Failed to save cache: {e}")
+            print(f"[PKG-MGR] Warning: Failed to save cache: {e}")
         
         if errors:
+            print(f"[PKG-MGR] Completed with {len(errors)} errors")
             return False, errors
         else:
-            print(f"[VENV] Successfully installed {len(installed)} packages")
+            print(f"[PKG-MGR] ✓ Successfully installed {len(installed)} packages")
             return True, []
     
-    def get_venv_command(self, original_command: List[str]) -> List[str]:
+    def get_modified_env(self, base_env: Optional[Dict] = None) -> Dict:
         """
-        Convert command to use venv Python instead of system Python.
+        Get environment variables with modified PYTHONPATH for training libs.
         
         Args:
-            original_command: Original command list (e.g., ['python', 'script.py', ...])
+            base_env: Base environment dict (defaults to os.environ.copy())
             
         Returns:
-            Modified command list using venv Python
+            Modified environment dict
         """
-        if not self.venv_exists():
-            raise RuntimeError("Virtual environment does not exist")
+        if base_env is None:
+            env = os.environ.copy()
+        else:
+            env = base_env.copy()
         
-        venv_python = self._get_venv_python()
+        if not self.libs_dir.exists():
+            return env
         
-        # Replace first element (Python executable) with venv Python
-        if original_command and original_command[0].endswith('python.exe'):
-            new_command = [venv_python] + original_command[1:]
-            return new_command
+        # Add training_libs to PYTHONPATH (highest priority)
+        libs_path = str(self.libs_dir.absolute())
+        current_pythonpath = env.get("PYTHONPATH", "")
         
-        return original_command
+        if current_pythonpath:
+            env["PYTHONPATH"] = f"{libs_path}{os.pathsep}{current_pythonpath}"
+        else:
+            env["PYTHONPATH"] = libs_path
+        
+        return env
     
     def verify_installation(self) -> Tuple[bool, List[str]]:
         """
-        Verify all required packages are installed and working.
+        Verify packages are installed and importable.
         
         Returns:
             (all_ok, list_of_messages)
         """
-        if not self.venv_exists():
-            return False, ["Virtual environment does not exist"]
+        if not self.libs_dir.exists():
+            return False, ["Package directory does not exist"]
         
-        python_exe = self._get_venv_python()
+        python_exe = self._get_python_exe()
         messages = []
         all_ok = True
         
-        # Test each package
-        for package in self.TRAINING_REQUIREMENTS.keys():
-            test_code = f"import {package}; print({package}.__version__)"
+        # Get modified environment
+        env = self.get_modified_env()
+        
+        # Test critical packages
+        test_packages = ['torch', 'transformers', 'diffusers', 'accelerate']
+        
+        for package in test_packages:
+            test_code = f"""
+import sys
+sys.path.insert(0, r'{self.libs_dir}')
+try:
+    import {package}
+    print(f'{package}:' + {package}.__version__)
+except Exception as e:
+    print(f'{package}:ERROR:' + str(e))
+"""
             
             try:
                 result = subprocess.run(
                     [python_exe, "-c", test_code],
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=10,
+                    env=env
                 )
                 
-                if result.returncode == 0:
-                    version = result.stdout.strip()
-                    messages.append(f"✓ {package}: {version}")
-                else:
-                    messages.append(f"✗ {package}: import failed")
+                output = result.stdout.strip()
+                
+                if 'ERROR' in output:
+                    messages.append(f"✗ {output}")
                     all_ok = False
+                elif output:
+                    messages.append(f"✓ {output}")
+                else:
+                    messages.append(f"✗ {package}: no output")
+                    all_ok = False
+                    
             except Exception as e:
                 messages.append(f"✗ {package}: {e}")
                 all_ok = False
         
         return all_ok, messages
     
-    def setup_training_env(self, force_recreate: bool = False) -> Tuple[bool, str]:
+    def setup_training_packages(self, force_reinstall: bool = False) -> Tuple[bool, str]:
         """
-        Complete setup: create venv and install all requirements.
+        Complete setup: create directory and install packages.
         
         Args:
-            force_recreate: Force recreation of venv
+            force_reinstall: Force reinstallation
             
         Returns:
             (success, status_message)
         """
-        # Step 1: Create venv
-        if force_recreate or not self.venv_exists():
-            success, msg = self.create_venv(force=force_recreate)
+        # Step 1: Create directory
+        if force_reinstall or not self.libs_dir.exists():
+            success, msg = self.create_libs_dir(force=force_reinstall)
             if not success:
                 return False, msg
         
-        # Step 2: Install requirements
-        print("[VENV] Installing training requirements...")
-        success, errors = self.install_requirements()
+        # Step 2: Install packages
+        print("[PKG-MGR] Installing training packages...")
+        print("[PKG-MGR] This may take 5-10 minutes on first run...")
+        
+        success, errors = self.install_packages()
         
         if not success:
-            error_msg = "Failed to install some packages:\n" + "\n".join(errors)
+            error_msg = "Failed to install some packages:\n" + "\n".join(errors[:5])  # Show first 5 errors
             return False, error_msg
         
-        # Step 3: Verify installation
-        print("[VENV] Verifying installation...")
+        # Step 3: Verify
+        print("[PKG-MGR] Verifying installation...")
         all_ok, messages = self.verify_installation()
         
         if not all_ok:
             return False, "Installation verification failed:\n" + "\n".join(messages)
         
-        return True, "Training environment ready"
+        return True, "Training packages ready"
 
 
-def ensure_training_venv(base_dir: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
+def ensure_training_packages(base_dir: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
     """
-    Utility function to ensure training venv exists and is ready.
+    Ensure training packages are installed and ready.
     
-    Args:
-        base_dir: Base directory for venv
-        
     Returns:
-        (success, message, venv_python_path)
+        (success, message, libs_directory_path)
     """
-    manager = VirtualEnvManager(base_dir)
+    manager = StandalonePackageManager(base_dir)
     
-    if not manager.venv_exists():
-        print("[VENV] Training environment not found, creating...")
-        success, msg = manager.setup_training_env()
+    if not manager.libs_exist():
+        print("[PKG-MGR] Training packages not found, installing...")
+        success, msg = manager.setup_training_packages()
         
         if not success:
             return False, msg, None
     
-    # Verify it works
+    # Verify installation
     all_ok, messages = manager.verify_installation()
     
     if not all_ok:
-        print("[VENV] Verification failed, recreating environment...")
-        success, msg = manager.setup_training_env(force_recreate=True)
+        print("[PKG-MGR] Verification failed, reinstalling...")
+        success, msg = manager.setup_training_packages(force_reinstall=True)
         
         if not success:
             return False, msg, None
     
-    venv_python = manager._get_venv_python()
-    return True, "Training environment ready", venv_python
+    libs_path = str(manager.libs_dir.absolute())
+    return True, "Training packages ready", libs_path

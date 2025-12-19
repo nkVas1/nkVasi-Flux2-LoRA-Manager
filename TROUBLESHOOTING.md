@@ -15,59 +15,57 @@ print_environment_report()
 ## Error: "cannot import name 'GenerationMixin' from 'transformers.generation'"
 
 ### Root Cause
-Version mismatch between ComfyUI's transformers and sd-scripts requirements.
+Version conflict between ComfyUI's `transformers` and sd-scripts requirements.
 
-### Solution: Virtual Environment (Automatic - v1.4+)
+### Solution: Standalone Package Manager
 
-**v1.4+ uses isolated training environment to prevent version conflicts.**
+**v1.5+ uses isolated package directory (no venv needed - works with embedded Python)**
 
-#### First-time Setup:
+#### Setup:
 ```bash
 cd G:\ComfyUI-StableDif-t27-p312-cu128-v2.1\ComfyUI\custom_nodes\ComfyUI-Flux2-LoRA-Manager
 python setup_training_env.py
 ```
 
-This creates `training_venv` folder with exact dependency versions:
-- `transformers==4.36.2` (compatible with GenerationMixin)
-- `diffusers==0.25.0`
-- `accelerate==0.25.0`
-- All other dependencies pinned to compatible versions
+This installs packages to `training_libs/` folder (5-10 minutes, ~2GB download).
 
-#### If Error Persists:
+#### If "No module named venv" error:
+This is normal with embedded Python. The new system **doesn't use venv** - it works around this limitation.
 
-1. **Force recreate environment:**
+#### If Setup Fails:
+
+1. **Check disk space:** Need 5GB+ free
+2. **Run as administrator** (Windows permissions)
+3. **Try force reinstall:**
    ```bash
    python setup_training_env.py --force
    ```
-
-2. **Manual cleanup:**
+4. **Manual cleanup:**
    ```bash
-   # Delete old venv
-   rmdir /s training_venv
-   
-   # Recreate
+   rmdir /s training_libs
    python setup_training_env.py
    ```
 
-3. **Verify installation:**
-   ```python
-   from src.venv_manager import VirtualEnvManager
-   manager = VirtualEnvManager()
-   all_ok, messages = manager.verify_installation()
-   for msg in messages:
-       print(msg)
-   ```
+#### Verify Installation:
+```python
+from src.venv_manager import StandalonePackageManager
+manager = StandalonePackageManager()
+all_ok, messages = manager.verify_installation()
+for msg in messages:
+    print(msg)
+```
 
-### How It Works
+### How It Works (Technical)
 
-The plugin now uses **two separate Python environments**:
+Instead of creating a virtual environment (which embedded Python can't do), we:
 
-1. **ComfyUI Environment** (main):
-   - Used for UI and workflow execution
-   - Has its own dependency versions
-   
-2. **Training Environment** (isolated):
-   - Used ONLY for training process
+1. Install packages to `training_libs/` using `pip install --target`
+2. Modify `PYTHONPATH` to prioritize training_libs
+3. Training process uses isolated versions without affecting ComfyUI
+
+This gives the same isolation as venv but works with embedded Python.
+
+---
    - Has exact versions required by sd-scripts
    - Created in `training_venv/` folder
    - Automatically created on first training run

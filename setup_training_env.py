@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
-Setup script for training environment.
-Run this once to create isolated venv with correct dependencies.
+Setup script for training environment (Embedded Python Compatible).
+Installs packages to separate directory instead of creating venv.
 
 Usage:
     python setup_training_env.py
-    python setup_training_env.py --force  # Force recreate
+    python setup_training_env.py --force  # Force reinstall
 """
 
 import sys
@@ -15,50 +15,59 @@ import argparse
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from venv_manager import VirtualEnvManager
+from venv_manager import StandalonePackageManager
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Setup Flux2 training environment")
-    parser.add_argument("--force", action="store_true", help="Force recreate environment")
+    parser = argparse.ArgumentParser(description="Setup Flux2 training packages")
+    parser.add_argument("--force", action="store_true", help="Force reinstall packages")
     args = parser.parse_args()
     
     print("=" * 70)
-    print("FLUX2 LORA MANAGER - TRAINING ENVIRONMENT SETUP")
+    print("FLUX2 LORA MANAGER - TRAINING PACKAGES SETUP")
     print("=" * 70)
     print()
-    
-    manager = VirtualEnvManager()
-    
-    print(f"Virtual environment will be created at:")
-    print(f"  {manager.venv_dir}")
+    print("NOTE: This method works with embedded Python (no venv module needed)")
     print()
     
-    if manager.venv_exists() and not args.force:
-        print("Virtual environment already exists.")
-        print("Use --force to recreate.")
+    manager = StandalonePackageManager()
+    
+    print(f"Packages will be installed to:")
+    print(f"  {manager.libs_dir}")
+    print()
+    
+    if manager.libs_exist() and not args.force:
+        print("Training packages already exist.")
+        print("Use --force to reinstall.")
         print()
         
         # Verify existing installation
-        print("Verifying existing installation...")
+        print("Verifying existing packages...")
         all_ok, messages = manager.verify_installation()
         
         for msg in messages:
             print(f"  {msg}")
         
         if all_ok:
-            print("\n✓ Environment is ready for training")
+            print("\n✓ Packages are ready for training")
             return 0
         else:
-            print("\n✗ Environment has issues, use --force to recreate")
+            print("\n✗ Some packages have issues, use --force to reinstall")
             return 1
     
-    # Create environment
-    print("Creating virtual environment...")
-    success, msg = manager.setup_training_env(force_recreate=args.force)
+    # Install packages
+    print("Installing training packages...")
+    print("This will take 5-10 minutes (downloading ~2GB)...")
+    print()
+    
+    success, msg = manager.setup_training_packages(force_reinstall=args.force)
     
     if not success:
         print(f"\n✗ Setup failed: {msg}")
+        print("\nTroubleshooting:")
+        print("  1. Check internet connection")
+        print("  2. Try running as administrator")
+        print("  3. Check disk space (need 5GB+)")
         return 1
     
     print(f"\n✓ {msg}")
@@ -78,16 +87,14 @@ def main():
         print("✓ SETUP COMPLETE - Ready for training!")
         print()
         print("Next steps:")
-        print("  1. Configure your training in ComfyUI")
+        print("  1. Configure training in ComfyUI")
         print("  2. Run training workflow")
-        print("  3. Monitor progress in Flux2 Training Monitor")
+        print("  3. Monitor in Flux2 Training Monitor")
     else:
-        print("✗ SETUP INCOMPLETE - Some packages failed to install")
+        print("✗ SETUP INCOMPLETE")
         print()
-        print("Try:")
-        print("  1. Check internet connection")
-        print("  2. Run: python setup_training_env.py --force")
-        print("  3. Check error messages above")
+        print("Some packages failed to install.")
+        print("Training may still work with partial installation.")
     
     print("=" * 70)
     
@@ -96,3 +103,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

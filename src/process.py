@@ -12,7 +12,7 @@ import time
 from typing import Optional, List
 
 # Virtual environment management
-from .venv_manager import VirtualEnvManager, ensure_training_venv
+from .venv_manager import StandalonePackageManager, ensure_training_packages
 
 # ComfyUI imports (graceful fallback if not available)
 try:
@@ -89,54 +89,52 @@ class TrainingProcessManager:
             print("[FLUX-TRAIN] Environment checker not available, skipping pre-flight check")
         # =====================================
         
-        # === VIRTUAL ENVIRONMENT SETUP ===
-        print("[FLUX-TRAIN] Ensuring training virtual environment...")
+        # === TRAINING PACKAGES SETUP ===
+        print("[FLUX-TRAIN] Ensuring training packages are installed...")
         if PromptServer:
             try:
-                PromptServer.instance.send_sync("flux_train_log", {"line": "Checking training environment..."})
+                PromptServer.instance.send_sync("flux_train_log", {"line": "Checking training packages..."})
             except Exception:
                 pass
-        
+
         # Get plugin base directory
         plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        
-        venv_python = None
+
         try:
-            # Ensure venv exists and is ready
-            success, msg, venv_python = ensure_training_venv(plugin_dir)
+            # Ensure packages are installed
+            success, msg, libs_path = ensure_training_packages(plugin_dir)
             
             if not success:
-                error_msg = f"Failed to setup training environment: {msg}"
+                error_msg = f"Failed to setup training packages: {msg}"
                 print(f"[FLUX-TRAIN] {error_msg}")
                 if PromptServer:
                     try:
                         PromptServer.instance.send_sync("flux_train_log", {"line": error_msg})
-                        PromptServer.instance.send_sync("flux_train_log", {"line": "Try: Delete training_venv folder and restart"})
+                        PromptServer.instance.send_sync("flux_train_log", {"line": "Try: Delete training_libs folder and restart"})
                     except Exception:
                         pass
-                raise RuntimeError(error_msg)
-            
-            print(f"[FLUX-TRAIN] ✓ {msg}")
-            print(f"[FLUX-TRAIN] Using Python: {venv_python}")
-            
-            if PromptServer:
-                try:
-                    PromptServer.instance.send_sync("flux_train_log", {"line": f"✓ {msg}"})
-                    PromptServer.instance.send_sync("flux_train_log", {"line": "Using isolated Python environment"})
-                except Exception:
-                    pass
-        
+                # Don't raise - fallback to system packages
+                print("[FLUX-TRAIN] Falling back to system Python packages")
+            else:
+                print(f"[FLUX-TRAIN] ✓ {msg}")
+                print(f"[FLUX-TRAIN] Using packages from: {libs_path}")
+                
+                if PromptServer:
+                    try:
+                        PromptServer.instance.send_sync("flux_train_log", {"line": f"✓ {msg}"})
+                    except Exception:
+                        pass
+
         except Exception as e:
-            error_msg = f"Virtual environment error: {e}"
+            error_msg = f"Package manager error: {e}"
             print(f"[FLUX-TRAIN] {error_msg}")
             if PromptServer:
                 try:
                     PromptServer.instance.send_sync("flux_train_log", {"line": error_msg})
                 except Exception:
                     pass
-            # Continue with original Python (fallback)
-            print("[FLUX-TRAIN] Falling back to system Python (may have version conflicts)")
-        # ==================================
+            print("[FLUX-TRAIN] Continuing with system Python packages")
+        # ===================================
         
         if self.process and self.process.poll() is None:
             msg = "[FLUX-TRAIN] Warning: Process already running. Stop it first."
@@ -170,11 +168,14 @@ class TrainingProcessManager:
         env["DIFFUSERS_DISABLE_TELEMETRY"] = "1"
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
         
-        # Use venv Python if available
-        if venv_python and os.path.exists(venv_python):
-            print(f"[FLUX-TRAIN] Replacing Python with venv: {venv_python}")
-            if len(cmd_list) > 0 and cmd_list[0].endswith(('python.exe', 'python')):
-                cmd_list[0] = venv_python
+        # Modify PYTHONPATH to use training_libs if available
+        try:
+            manager = StandalonePackageManager(plugin_dir)
+            env = manager.get_modified_env(env)
+            print(f"[FLUX-TRAIN] Updated PYTHONPATH for training packages")
+        except Exception as e:
+            print(f"[FLUX-TRAIN] Could not update PYTHONPATH: {e}")
+
 
         # === ULTIMATE FIX: Wrapper script to guarantee library module discovery ===
         # Problem: accelerate subprocess loses parent's sys.path and cwd context
