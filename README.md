@@ -288,6 +288,67 @@ ComfyUI-Flux2-LoRA-Manager/
 
 MIT License. Free for commercial and non-commercial use. See [LICENSE](LICENSE) for details.
 
+## 🐛 Known Issues & Solutions
+
+### Issue: `bitsandbytes.__spec__ is None`
+
+**Root Cause:** In PyTorch 2.9+ with triton, transformers checks module availability using `importlib.util.find_spec()`. If a fake module has `__spec__ = None`, this raises `ValueError`.
+
+**Solution (v1.7.0+):** We now use `ProperFakeModule` class that includes:
+- Valid `ModuleSpec` with `origin="blocked"`
+- Proper `__file__`, `__path__`, `__package__` attributes
+- Passes all `importlib` checks
+
+**Status:** ✅ **Fixed in current version**
+
+---
+
+### Issue: Training still fails on Windows
+
+If you're still seeing import errors after updating:
+
+1. **Delete cached files:**
+   ```bash
+   rm -rf training_libs/
+   rm -rf __pycache__/
+   rm -rf src/__pycache__/
+   ```
+
+2. **Restart ComfyUI** (fresh Python process)
+
+3. **Check Python version:**
+   ```bash
+   python --version  # Must be 3.10-3.12
+   ```
+
+4. **Run diagnostics:**
+   ```bash
+   cd custom_nodes/ComfyUI-Flux2-LoRA-Manager
+   python tests/test_import_blocker.py
+   ```
+   Should output: `✅ ALL TESTS PASSED`
+
+---
+
+### Success Indicators
+
+When training starts successfully, you'll see:
+```
+[WRAPPER] ⚡ Installing import blockers...
+[IMPORT-BLOCKER] Installing production import blockers...
+[IMPORT-BLOCKER]   ✓ Blocked triton
+[IMPORT-BLOCKER]   ✓ Blocked bitsandbytes
+[IMPORT-BLOCKER] ✓ All blockers installed with proper __spec__
+[IMPORT-BLOCKER] ✓ Triton properly blocked (importlib-verified)
+[WRAPPER] ✓ Import protection verified
+[WRAPPER] ✓ Training libs prioritized
+[WRAPPER] ✓ transformers 4.36.2 loaded
+```
+
+Then training begins without import errors.
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please:

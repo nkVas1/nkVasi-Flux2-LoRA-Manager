@@ -268,88 +268,25 @@ class TrainingProcessManager:
             wrapper_content = f'''import sys
 import os
 
-# ============================================================================
-# STAGE 0: ULTRA-AGGRESSIVE TRITON PREVENTION (before any imports)
-# ============================================================================
+# === CRITICAL: Block problematic modules BEFORE any imports ===
+print("[WRAPPER] ⚡ Installing import blockers...")
 
-# Block triton at module level
-class _DeadTriton:
-    """Fake triton that returns None for everything."""
-    def __getattr__(self, name):
-        return None
-    def __call__(self, *args, **kwargs):
-        return lambda x: x
+# Add plugin src to path FIRST
+plugin_src = r"{plugin_src_forward}"
+if plugin_src not in sys.path:
+    sys.path.insert(0, plugin_src)
 
-sys.modules['triton'] = _DeadTriton()
-sys.modules['triton.language'] = _DeadTriton()
-sys.modules['triton.compiler'] = _DeadTriton()
-sys.modules['triton.runtime'] = _DeadTriton()
+# Install blockers FIRST (before torch, transformers, anything)
+from import_blocker import install_import_blockers, verify_blockers_active
+install_import_blockers()
 
-# Critical environment variables
-os.environ["TRITON_ENABLED"] = "0"
-os.environ["DISABLE_TRITON"] = "1"
-os.environ["TORCH_COMPILE_DISABLE"] = "1"
-os.environ["TORCH_INDUCTOR_DISABLE"] = "1"
+# Verify blockers work
+if verify_blockers_active():
+    print("[WRAPPER] ✓ Import protection verified")
+else:
+    print("[WRAPPER] ⚠ Blockers installed but verification failed")
 
-print("[WRAPPER] ⚡ Stage 0: Triton blocked at sys.modules level")
-
-# ============================================================================
-# STAGE 1: MONKEY-PATCH TORCH BEFORE ANY REAL IMPORTS
-# ============================================================================
-
-def patch_torch_for_windows():
-    """
-    Patch torch._dynamo to not crash on Windows without triton.
-    Must be called BEFORE torchvision imports torch._dynamo.
-    """
-    try:
-        # Import torch first (safe, doesn't need triton yet)
-        import torch
-        
-        # Disable torch.compile globally
-        torch._dynamo.config.suppress_errors = True
-        torch.backends.cudnn.benchmark = False
-        
-        print("[WRAPPER] ✓ torch._dynamo disabled")
-        
-        # Patch torch._dynamo.utils BEFORE it gets imported
-        import torch._dynamo as dynamo
-        
-        # Monkey-patch the problematic utils module
-        original_utils_init = None
-        try:
-            import torch._dynamo.utils as utils_module
-            # If utils already imported, patch it
-            if hasattr(utils_module, 'common_constant_types'):
-                # Clear triton references
-                utils_module.common_constant_types = set(utils_module.common_constant_types)
-                print("[WRAPPER] ✓ Patched torch._dynamo.utils (already loaded)")
-        except ImportError:
-            # Utils not loaded yet, will be patched via import hook
-            pass
-        
-        # Disable inductor completely
-        try:
-            import torch._inductor.config as inductor_config
-            inductor_config.triton.cudagraphs = False
-            inductor_config.cpp.enable_kernel_profile = False
-            print("[WRAPPER] ✓ torch._inductor disabled")
-        except Exception as e:
-            print(f"[WRAPPER] ⚠ Could not disable inductor: {{e}}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"[WRAPPER] ⚠ Torch patching failed: {{e}}")
-        return False
-
-# Apply torch patches BEFORE anything else
-patch_torch_for_windows()
-
-# ============================================================================
-# STAGE 2: SETUP PYTHON PATH
-# ============================================================================
-
+# === Setup paths ===
 training_libs = r"{script_dir_abs}".replace("\\\\", "/") + "/../../../custom_nodes/ComfyUI-Flux2-LoRA-Manager/training_libs"
 training_libs = os.path.normpath(training_libs)
 
@@ -359,56 +296,32 @@ if os.path.exists(training_libs):
 
 sys.path.insert(0, r"{script_dir_forward}")
 
-# ============================================================================
-# STAGE 3: IMPORT BLOCKER (additional safety)
-# ============================================================================
-
-try:
-    plugin_src = r"{plugin_src_forward}"
-    if plugin_src not in sys.path:
-        sys.path.insert(0, plugin_src)
-    
-    from import_blocker import install_import_blockers, verify_blockers_active
-    install_import_blockers()
-    
-    if verify_blockers_active():
-        print("[WRAPPER] ✓ Import protection verified")
-    else:
-        print("[WRAPPER] ⚠ Blockers partially active (torch already patched)")
-        
-except Exception as e:
-    print(f"[WRAPPER] Note: Import blocker: {{e}}")
-
-# ============================================================================
-# STAGE 4: VERIFY SETUP
-# ============================================================================
-
+# === Verify setup ===
 library_path = os.path.join(r"{script_dir_forward}", "library")
 if not os.path.exists(library_path):
     print(f"[WRAPPER] ERROR: library not found at {{library_path}}")
     sys.exit(1)
 
-print(f"[WRAPPER] Added sd-scripts to sys.path: {script_dir_forward}")
-print("[WRAPPER] library module accessible")
+print(f"[WRAPPER] ✓ sd-scripts added: {script_dir_forward}")
 
-# Verify transformers
+# === Test transformers import ===
 try:
     import transformers
-    print(f"[WRAPPER] transformers {{transformers.__version__}} from {{transformers.__file__}}")
-except ImportError as e:
-    print(f"[WRAPPER] WARNING: transformers check failed: {{e}}")
+    print(f"[WRAPPER] ✓ transformers {{transformers.__version__}} loaded")
+except Exception as e:
+    print(f"[WRAPPER] ⚠ transformers import failed: {{e}}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
-# ============================================================================
-# STAGE 5: EXECUTE TRAINING (with error handling)
-# ============================================================================
-
+# === Execute training script ===
 try:
     script_path = r"{original_script_forward}"
     with open(script_path, "r", encoding="utf-8") as f:
         code = compile(f.read(), script_path, "exec")
         exec(code)
 except Exception as e:
-    print(f"[WRAPPER] Training script error: {{e}}")
+    print(f"[WRAPPER] Training error: {{e}}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
