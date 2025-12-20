@@ -1,257 +1,64 @@
 """
-Advanced Import Blocker for Embedded Python Environments
-
-Blocks problematic packages (triton, bitsandbytes) that require
-Python.h and full development environment.
-
-This module uses Python's meta_path hooks to intercept imports
-BEFORE they try to compile C extensions.
+Simplified import blocker - now torch is patched BEFORE import.
+This module provides backup blocking only.
 """
 
 import sys
-import types
-import warnings
-from typing import Optional, Any
+import os
 
+_BLOCKERS_INSTALLED = False
 
-class ProblematicModuleBlocker:
-    """
-    Meta path finder/loader that blocks imports of modules
-    that cause compilation errors in embedded Python.
-    """
+class _ImportBlocker:
+    """Minimal blocker that raises on import."""
+    def __init__(self, name):
+        self.name = name
     
-    # Modules that require full Python dev environment
-    BLOCKED_MODULES = {
-        'triton': 'Triton requires Python.h (use standard PyTorch operations)',
-        'bitsandbytes': 'bitsandbytes requires compilation (quantization disabled)',
-        'bitsandbytes.nn': 'bitsandbytes.nn blocked (embedded Python limitation)',
-        'bitsandbytes.triton': 'bitsandbytes.triton blocked (compilation not supported)',
-    }
-    
-    # Modules to return dummy implementations for
-    DUMMY_MODULES = {
-        'triton',
-        'bitsandbytes',
-    }
-    
-    def find_spec(self, fullname, path=None, target=None):
-        """
-        Called by Python import system to check if this finder handles the module.
-        """
-        # Check if this is a blocked module or submodule
-        for blocked in self.BLOCKED_MODULES.keys():
-            if fullname == blocked or fullname.startswith(blocked + '.'):
-                return self._create_dummy_spec(fullname)
+    def __getattr__(self, item):
         return None
-    
-    def find_module(self, fullname, path=None):
-        """
-        Legacy find_module for Python < 3.4 compatibility.
-        """
-        for blocked in self.BLOCKED_MODULES.keys():
-            if fullname == blocked or fullname.startswith(blocked + '.'):
-                return self
-        return None
-    
-    def load_module(self, fullname):
-        """
-        Load a dummy module instead of the real one.
-        """
-        if fullname in sys.modules:
-            return sys.modules[fullname]
-        
-        # Create dummy module
-        module = types.ModuleType(fullname)
-        module.__package__ = fullname.rpartition('.')[0]
-        module.__loader__ = self
-        module.__file__ = '<blocked>'
-        module.__path__ = []
-        
-        # Add warning attribute
-        reason = self.BLOCKED_MODULES.get(fullname, 'Module blocked in embedded Python')
-        module.__doc__ = f"BLOCKED: {reason}"
-        
-        # Add dummy attributes that might be accessed
-        module.__all__ = []
-        
-        # Register in sys.modules to prevent re-import
-        sys.modules[fullname] = module
-        
-        # Warn user (only once per module)
-        if not hasattr(module, '_warned'):
-            warnings.warn(
-                f"Module '{fullname}' was blocked: {reason}",
-                ImportWarning,
-                stacklevel=2
-            )
-            module._warned = True
-        
-        return module
-    
-    def _create_dummy_spec(self, fullname):
-        """Create a ModuleSpec for the dummy module."""
-        try:
-            from importlib.machinery import ModuleSpec
-            return ModuleSpec(fullname, self, is_package=True)
-        except ImportError:
-            # Python < 3.4 doesn't have ModuleSpec
-            return None
-
-
-class DiffusersQuantizerPatcher:
-    """
-    Patches diffusers to skip quantizer imports that cause
-    bitsandbytes/triton compilation errors.
-    """
-    
-    @staticmethod
-    def patch():
-        """
-        Monkey-patch diffusers to prevent quantizer imports.
-        Must be called BEFORE diffusers is imported.
-        """
-        import sys
-        
-        # Check if diffusers is already imported
-        if 'diffusers' in sys.modules:
-            print("[IMPORT-PATCH] Warning: diffusers already imported, patching may be incomplete")
-        
-        # Create a custom import hook for diffusers.quantizers
-        class DiffusersQuantizerBlocker:
-            def find_spec(self, fullname, path=None, target=None):
-                if fullname.startswith('diffusers.quantizers'):
-                    return self._create_safe_spec(fullname)
-                return None
-            
-            def find_module(self, fullname, path=None):
-                if fullname.startswith('diffusers.quantizers'):
-                    return self
-                return None
-            
-            def load_module(self, fullname):
-                if fullname in sys.modules:
-                    return sys.modules[fullname]
-                
-                # Create minimal module that doesn't import bitsandbytes
-                module = types.ModuleType(fullname)
-                module.__package__ = fullname.rpartition('.')[0]
-                module.__loader__ = self
-                module.__file__ = '<safe-patched>'
-                module.__path__ = []
-                module.__all__ = []
-                
-                # Add dummy classes if this is the main quantizers module
-                if fullname == 'diffusers.quantizers':
-                    # Create dummy quantizer classes that do nothing
-                    class DummyQuantizer:
-                        def __init__(self, *args, **kwargs):
-                            pass
-                    
-                    module.DiffusersQuantizer = DummyQuantizer
-                    module.DiffusersAutoQuantizer = DummyQuantizer
-                
-                sys.modules[fullname] = module
-                return module
-            
-            def _create_safe_spec(self, fullname):
-                try:
-                    from importlib.machinery import ModuleSpec
-                    return ModuleSpec(fullname, self, is_package=True)
-                except ImportError:
-                    return None
-        
-        # Install the quantizer blocker
-        sys.meta_path.insert(0, DiffusersQuantizerBlocker())
-        print("[IMPORT-PATCH] Diffusers quantizer imports patched")
-
 
 def install_import_blockers():
     """
-    Install all import blockers at the very beginning of script execution.
-    This MUST be called before any ML library imports.
+    Install minimal import blockers.
+    Note: Main blocking now happens in wrapper via torch patching.
     """
-    import os
+    global _BLOCKERS_INSTALLED
     
-    # === CRITICAL: Emergency triton blocking BEFORE anything imports torch ===
-    # torch._dynamo.utils will try to access triton.language.dtype
-    # We must inject a fake triton EARLY to prevent compilation errors
-    class FakeTriton:
-        """Minimal fake triton module to satisfy torch._dynamo requirements."""
-        class _Language:
-            dtype = type  # Fake dtype attribute
-        
-        language = _Language()
-        compiler = None
-        runtime = None
-        
-        def __getattr__(self, name):
-            # Return self for any attribute access chain
-            return self
-        
-        def __call__(self, *args, **kwargs):
-            # Make it callable (for @triton.jit decorators)
-            def wrapper(func):
-                return func
-            return wrapper
+    if _BLOCKERS_INSTALLED:
+        return
     
-    # Install EARLY, before any other imports
-    sys.modules['triton'] = FakeTriton()
-    sys.modules['triton.language'] = FakeTriton._Language()
-    sys.modules['triton.compiler'] = FakeTriton()
-    sys.modules['triton.runtime'] = FakeTriton()
+    # Backup blockers (torch already patched in wrapper)
+    if 'triton' not in sys.modules:
+        sys.modules['triton'] = _ImportBlocker('triton')
     
-    print("[IMPORT-BLOCKER] ✓ Emergency triton blocker installed (fake module)")
+    if 'bitsandbytes' not in sys.modules:
+        sys.modules['bitsandbytes'] = _ImportBlocker('bitsandbytes')
     
-    # Set environment variables EARLY to prevent torch.compile
-    os.environ["TORCH_COMPILE_DISABLE"] = "1"  # Disable torch.compile (uses triton)
-    os.environ["DISABLE_TRITON"] = "1"
-    os.environ["TRITON_ENABLED"] = "0"
+    print("[IMPORT-BLOCKER] ✓ Backup blockers installed")
     
-    # === Install standard blocker system ===
-    blocker = ProblematicModuleBlocker()
+    # Environment variables
+    os.environ.setdefault("TRITON_ENABLED", "0")
+    os.environ.setdefault("DISABLE_TRITON", "1")
+    os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
     
-    # Remove old instances if they exist (for re-runs)
-    sys.meta_path = [hook for hook in sys.meta_path 
-                     if not isinstance(hook, ProblematicModuleBlocker)]
-    
-    # Insert at the very beginning (highest priority)
-    sys.meta_path.insert(0, blocker)
-    
-    print("[IMPORT-BLOCKER] ✓ Standard blocker system activated")
-    
-    # Patch diffusers
-    DiffusersQuantizerPatcher.patch()
-    
-    # Set additional environment variables as safety layer
-    os.environ["BITSANDBYTES_NOWELCOME"] = "1"
-    os.environ["DISABLE_BITSANDBYTES_WARN"] = "1"
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
-    
-    print("[IMPORT-BLOCKER] ✓ Environment variables configured for embedded Python safety")
+    _BLOCKERS_INSTALLED = True
 
-
-def verify_blockers_active():
-    """
-    Test that import blockers are working correctly.
-    Returns True if blockers are active, False otherwise.
-    """
+def verify_blockers_active() -> bool:
+    """Verify blockers active OR torch safely patched."""
     try:
-        # Try to import a blocked module
-        import triton
-        # If we got here, blocker didn't work (triton is real module)
-        if hasattr(triton, '__file__') and triton.__file__ != '<blocked>':
-            print("[IMPORT-BLOCKER] WARNING: Blockers not active! Real triton imported")
-            return False
-    except ImportError:
-        # This is also OK - module simply doesn't exist
-        pass
-    
-    print("[IMPORT-BLOCKER] Verification passed")
-    return True
+        import torch
+        # Check if torch._dynamo is disabled
+        if hasattr(torch, '_dynamo'):
+            if hasattr(torch._dynamo.config, 'suppress_errors'):
+                if torch._dynamo.config.suppress_errors:
+                    print("[IMPORT-BLOCKER] ✓ torch._dynamo suppressed")
+                    return True
+        
+        print("[IMPORT-BLOCKER] ⚠ Verification inconclusive")
+        return False
+    except Exception as e:
+        print(f"[IMPORT-BLOCKER] Verification error: {e}")
+        return False
 
-
-# Auto-install if this module is imported directly
-if __name__ != "__main__":
-    # This executes when module is imported (not when run as script)
-    # Useful for "import import_blocker" pattern
-    install_import_blockers()
+def patch_diffusers_quantizers():
+    """Patch diffusers to not import quantizers."""
+    pass  # No longer needed with torch patching

@@ -13,6 +13,7 @@ Unlike standard training nodes that crash ComfyUI by sharing memory, this extens
 - **[USAGE_GUIDE.md](USAGE_GUIDE.md)** - Complete step-by-step usage guide ⭐ START HERE
 - **[INFINITE_LOOP_FIX.md](INFINITE_LOOP_FIX.md)** - Fixed critical infinite loop issue in v1.5.1
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common errors and solutions
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Advanced troubleshooting guide
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history and changes
 - **[verify_installation.py](verify_installation.py)** - Pre-flight system check script
 
