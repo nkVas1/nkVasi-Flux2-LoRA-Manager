@@ -170,7 +170,44 @@ def install_import_blockers():
     Install all import blockers at the very beginning of script execution.
     This MUST be called before any ML library imports.
     """
-    # Install problematic module blocker
+    import os
+    
+    # === CRITICAL: Emergency triton blocking BEFORE anything imports torch ===
+    # torch._dynamo.utils will try to access triton.language.dtype
+    # We must inject a fake triton EARLY to prevent compilation errors
+    class FakeTriton:
+        """Minimal fake triton module to satisfy torch._dynamo requirements."""
+        class _Language:
+            dtype = type  # Fake dtype attribute
+        
+        language = _Language()
+        compiler = None
+        runtime = None
+        
+        def __getattr__(self, name):
+            # Return self for any attribute access chain
+            return self
+        
+        def __call__(self, *args, **kwargs):
+            # Make it callable (for @triton.jit decorators)
+            def wrapper(func):
+                return func
+            return wrapper
+    
+    # Install EARLY, before any other imports
+    sys.modules['triton'] = FakeTriton()
+    sys.modules['triton.language'] = FakeTriton._Language()
+    sys.modules['triton.compiler'] = FakeTriton()
+    sys.modules['triton.runtime'] = FakeTriton()
+    
+    print("[IMPORT-BLOCKER] ✓ Emergency triton blocker installed (fake module)")
+    
+    # Set environment variables EARLY to prevent torch.compile
+    os.environ["TORCH_COMPILE_DISABLE"] = "1"  # Disable torch.compile (uses triton)
+    os.environ["DISABLE_TRITON"] = "1"
+    os.environ["TRITON_ENABLED"] = "0"
+    
+    # === Install standard blocker system ===
     blocker = ProblematicModuleBlocker()
     
     # Remove old instances if they exist (for re-runs)
@@ -180,19 +217,17 @@ def install_import_blockers():
     # Insert at the very beginning (highest priority)
     sys.meta_path.insert(0, blocker)
     
-    print("[IMPORT-BLOCKER] Installed: triton, bitsandbytes imports will be blocked")
+    print("[IMPORT-BLOCKER] ✓ Standard blocker system activated")
     
     # Patch diffusers
     DiffusersQuantizerPatcher.patch()
     
-    # Set environment variables as additional safety layer
-    import os
+    # Set additional environment variables as safety layer
     os.environ["BITSANDBYTES_NOWELCOME"] = "1"
-    os.environ["DISABLE_TRITON"] = "1"
     os.environ["DISABLE_BITSANDBYTES_WARN"] = "1"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
     
-    print("[IMPORT-BLOCKER] Environment variables set for embedded Python safety")
+    print("[IMPORT-BLOCKER] ✓ Environment variables configured for embedded Python safety")
 
 
 def verify_blockers_active():

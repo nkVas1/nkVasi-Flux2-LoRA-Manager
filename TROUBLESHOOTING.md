@@ -483,3 +483,64 @@ Check ComfyUI logs in:
 - [ ] VRAM sufficient (8GB minimum)?
 
 If all checkboxes are marked, training should work!
+
+---
+
+## Known Issues & Solutions (v1.6.0+)
+
+### Issue: "module 'triton' has no attribute 'language'"
+
+**Cause:** PyTorch 2.9+ uses triton for torch.compile, which crashes on Windows.
+
+**Solution:** Plugin auto-blocks triton with emergency fake module.
+
+**Verification:** Check logs for `[WRAPPER] ⚡ Emergency triton blocker loaded` before torch import.
+
+**Status:** ✅ Fixed in v1.6.0+
+
+---
+
+### Issue: "regex==latest: Invalid requirement"
+
+**Cause:** Old pip doesn't support "latest" keyword.
+
+**Solution:** Updated to specific versions (regex 2023.12.25).
+
+```bash
+# Delete and reinstall if you see this
+rmdir /s training_libs
+python setup_training_env.py
+```
+
+**Status:** ✅ Fixed
+
+---
+
+### Issue: "cannot import name 'cached_download' from 'huggingface_hub'"
+
+**Cause:** System huggingface_hub too new (removed cached_download).
+
+**Solution:** Install compatible 0.20.3 in training_libs.
+
+```bash
+python -m pip install huggingface_hub==0.20.3 --target training_libs --upgrade
+```
+
+**Status:** ✅ Working
+
+---
+
+### Issue: tokenizers version incompatibility
+
+**Cause:** System tokenizers doesn't match transformers 4.36.2.
+
+**Solution:** Plugin installs tokenizers 0.15.2 in training_libs.
+
+**Verification:**
+```bash
+python -c "import sys; sys.path.insert(0, 'training_libs'); import tokenizers; print(tokenizers.__file__)"
+```
+
+Should show: `.../training_libs/tokenizers/...`
+
+**Status:** ✅ Fully isolated

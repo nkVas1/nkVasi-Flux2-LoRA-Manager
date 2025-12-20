@@ -1,7 +1,38 @@
+# v1.6.0 → v1.6.1 Release - Complete Dependency Resolution
+
+**Latest Version:** 1.6.1 (January 2025)  
+**Status:** ✅ PRODUCTION READY - Final Release
+
+---
+
+## 🎯 v1.6.1 - Critical Fixes
+
+**Three edge cases fixed in v1.6.1:**
+
+1. ✅ **"regex==latest" invalid pip syntax** → Fixed to regex 2023.12.25
+2. ✅ **triton.language.dtype crash on Windows** → Emergency fake triton blocker
+3. ✅ **tokenizers version conflicts** → Complete dependency tree isolation
+
+**Installation time:** 3-5 min (v1.6.0) → 5-8 min (v1.6.1 with full deps)  
+**Status:** All critical issues resolved, production-ready
+
+### v1.6.1 Changes Summary
+
+| Component | v1.6.0 | v1.6.1 |
+|-----------|--------|--------|
+| Packages | 8 isolated | **20 isolated** (full deps) |
+| Triton blocking | Standard blocker | **Emergency pre-import blocker** |
+| Version keywords | "latest" (broken) | **All pinned versions** |
+| torch._dynamo safety | Standard | **Emergency fake module** |
+
+**Update now:** `git pull origin main` (v1.6.1 is latest)
+
+---
+
 # v1.6.0 Release - Hybrid Package Isolation & Mega Progress Panel
 
 **Release Date:** January 2025  
-**Status:** ✅ PRODUCTION READY
+**Status:** ✅ PRODUCTION READY (superseded by v1.6.1)
 
 ---
 

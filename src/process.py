@@ -268,6 +268,35 @@ class TrainingProcessManager:
             wrapper_content = f'''import sys
 import os
 
+# === STEP 0: IMMEDIATE emergency triton blocking (BEFORE ANY IMPORTS) ===
+# torch._dynamo.utils tries to import triton.language.dtype on torch import
+# We must intercept this at the earliest possible moment
+class _EmergencyTriton:
+    """Emergency fake triton - blocks torch._dynamo triton access."""
+    class _Language:
+        dtype = type
+    
+    language = _Language()
+    compiler = None
+    runtime = None
+    
+    def __getattr__(self, name):
+        return self
+    
+    def __call__(self, *args, **kwargs):
+        def wrapper(f):
+            return f
+        return wrapper
+
+sys.modules['triton'] = _EmergencyTriton()
+sys.modules['triton.language'] = _EmergencyTriton._Language()
+print("[WRAPPER] ⚡ Emergency triton blocker loaded (before torch import)")
+
+# Set environment variables to disable all triton/compile features
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
+os.environ["DISABLE_TRITON"] = "1"
+os.environ["TRITON_ENABLED"] = "0"
+
 # === STEP 1: Prioritize training_libs in sys.path ===
 # This MUST be FIRST to override system packages
 training_libs = r"{script_dir_abs}".replace("\\\\", "/") + "/../../../custom_nodes/ComfyUI-Flux2-LoRA-Manager/training_libs"
@@ -281,7 +310,7 @@ if os.path.exists(training_libs):
 # === STEP 2: Add sd-scripts to sys.path ===
 sys.path.insert(0, r"{script_dir_forward}")
 
-# === STEP 3: Import blocker system ===
+# === STEP 3: Enhanced import blocker system ===
 try:
     plugin_src = r"{plugin_src_forward}"
     if plugin_src not in sys.path:
@@ -298,7 +327,6 @@ try:
 except Exception as e:
     print(f"[WRAPPER] WARNING: Import blocker setup failed: {{e}}")
     os.environ["BITSANDBYTES_NOWELCOME"] = "1"
-    os.environ["DISABLE_TRITON"] = "1"
 
 # === STEP 4: Verify library module ===
 library_path = os.path.join(r"{script_dir_forward}", "library")

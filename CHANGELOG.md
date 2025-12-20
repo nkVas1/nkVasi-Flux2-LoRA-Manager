@@ -6,6 +6,60 @@ Fixed critical issue where transitive dependencies (tokenizers, huggingface_hub)
 - ❌ ModuleNotFoundError: No module named 'tokenizers'
 - ❌ ImportError: cannot import name 'cached_download' from 'huggingface_hub'
 - ❌ Version conflicts: "tokenizers>=0.14,<0.19 required but found 0.22.1"
+- ❌ torch._dynamo crashes: "module 'triton' has no attribute 'language'"
+- ❌ "regex==latest: Invalid requirement"
+
+### Three Critical Fixes in v1.6.1
+
+#### Fix 1: Complete Dependency Isolation
+**Problem:** Only transformers was isolated, dependencies came from system.
+
+**Solution:** Explicitly list and isolate ALL 20 packages with exact versions.
+
+```python
+# TRAINING_REQUIREMENTS now includes:
+'transformers': '4.36.2',
+'tokenizers': '0.15.2',          # NOW isolated!
+'huggingface_hub': '0.20.3',     # NOW isolated!
+'regex': '2023.12.25',           # Specific version (not 'latest')
+'requests': '2.31.0',
+'tqdm': '4.66.1',
+'pyyaml': '6.0.1',
+'filelock': '3.13.1',
+'fsspec': '2023.12.2',
+'packaging': '23.2',
+# ... plus others
+```
+
+#### Fix 2: Emergency Triton Blocker
+**Problem:** torch._dynamo tries to import triton.language.dtype, crashes on Windows.
+
+**Solution:** Inject fake triton into sys.modules BEFORE torch loads.
+
+```python
+# In wrapper STEP 0 (before ANY imports):
+class _EmergencyTriton:
+    class _Language:
+        dtype = type  # Satisfies torch._dynamo.utils
+    language = _Language()
+    # ...
+
+sys.modules['triton'] = _EmergencyTriton()
+sys.modules['triton.language'] = _EmergencyTriton._Language()
+
+print("[WRAPPER] ⚡ Emergency triton blocker loaded (STEP 0)")
+```
+
+This blocks torch._dynamo from trying to use real triton (which requires C compiler).
+
+#### Fix 3: Version Pinning
+**Problem:** Using "latest" keyword in pip (not supported).
+
+**Solution:** Replace all "latest" with exact versions:
+- regex: 'latest' → '2023.12.25'
+- requests: 'latest' → '2.31.0'
+- tqdm: 'latest' → '4.66.1'
+- etc.
 
 ### Problem in v1.6.0
 ```bash

@@ -20,7 +20,7 @@ class StandalonePackageManager:
     Compatible with embedded Python.
     """
     
-    # Complete dependency tree for sd-scripts training
+    # Complete isolated dependency tree for sd-scripts training
     # IMPORTANT: We use system PyTorch (already in ComfyUI) to avoid:
     # - 15+ minute download times
     # - 2-3GB disk space duplication  
@@ -32,26 +32,24 @@ class StandalonePackageManager:
         
         # Training framework packages (MUST be isolated - critical versions)
         'transformers': '4.36.2',  # Specific GenerationMixin API version
-        'tokenizers': '0.15.2',  # Must match transformers 4.36.2
+        'tokenizers': '0.15.2',  # Must match transformers 4.36.2 exactly
         'diffusers': '0.25.1',
         'accelerate': '0.25.0',
         'safetensors': '0.4.2',
         'huggingface_hub': '0.20.3',  # Has cached_download, compatible with transformers
+        'peft': '0.7.1',
         
-        # Utilities and dependencies
+        # Utilities with fixed versions (prevent system version issues)
         'toml': '0.10.2',
         'omegaconf': '2.3.0',
         'einops': '0.7.0',
-        'peft': '0.7.1',
-        
-        # Additional transitive dependencies (prevent system version issues)
-        'regex': 'latest',  # tokenizers dependency
-        'requests': 'latest',  # huggingface_hub dependency
-        'tqdm': 'latest',  # progress bars
-        'pyyaml': 'latest',  # config files
-        'filelock': 'latest',  # huggingface_hub dependency
-        'fsspec': 'latest',  # file system abstraction
-        'packaging': 'latest',  # version parsing
+        'regex': '2023.12.25',  # Fixed version for tokenizers compatibility
+        'requests': '2.31.0',  # huggingface_hub dependency
+        'tqdm': '4.66.1',  # progress bars
+        'pyyaml': '6.0.1',  # config files
+        'filelock': '3.13.1',  # huggingface_hub dependency
+        'fsspec': '2023.12.2',  # file system abstraction
+        'packaging': '23.2',  # version parsing
     }
     
     def __init__(self, base_dir: Optional[str] = None):
