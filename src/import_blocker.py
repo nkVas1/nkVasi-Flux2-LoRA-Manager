@@ -18,20 +18,20 @@ _BLOCKERS_INSTALLED = False
 
 class ProperFakeModule(ModuleType):
     """
-    Fake module that passes importlib checks.
-    Has proper __spec__ to avoid ValueError in find_spec().
+    Production-grade fake module with nested attribute support.
+    Returns self for ALL attribute access to satisfy deep chains like:
+    triton.language.dtype, triton.compiler.compiler.AttrsDescriptor
     
-    This is crucial because transformers/utils/import_utils.py does:
-        spec = importlib.util.find_spec(pkg_name)
-        if spec is None: ...
-    
-    If our fake module has __spec__ = None, this raises ValueError.
+    CRITICAL: torch._dynamo.utils.py:2417 does:
+        common_constant_types.add(triton.language.dtype)
+    If triton.language.dtype returns None, this crashes.
+    Our solution: __getattr__ returns self, so any chain always returns a module object.
     """
     
     def __init__(self, name):
         super().__init__(name)
         
-        # Create fake spec to satisfy importlib
+        # Create proper __spec__ for importlib
         self.__spec__ = ModuleSpec(
             name=name,
             loader=None,
@@ -44,12 +44,32 @@ class ProperFakeModule(ModuleType):
         self.__package__ = name.rpartition('.')[0] if '.' in name else ''
     
     def __getattr__(self, item):
-        """Return None for any attribute (safe for checks)."""
-        return None
+        """
+        CRITICAL: Return self (not None) for nested attribute access.
+        This allows triton.language.dtype to work:
+        - triton.language -> returns self
+        - (self).dtype -> returns self
+        Result: triton.language.dtype = self (an object, not None)
+        """
+        return self
     
     def __call__(self, *args, **kwargs):
         """Make callable (for decorators like @triton.jit)."""
-        return lambda x: x
+        # If called with a function, return it unchanged (decorator pattern)
+        if args and callable(args[0]):
+            return args[0]
+        # Otherwise return a dummy wrapper
+        def wrapper(func):
+            return func
+        return wrapper
+    
+    def __bool__(self):
+        """Make falsy for checks like 'if triton:'"""
+        return False
+    
+    def __repr__(self):
+        """Clear representation showing it's a fake module."""
+        return f"<ProperFakeModule '{self.__name__}' (blocked)>"
 
 
 def install_import_blockers():
@@ -94,27 +114,54 @@ def install_import_blockers():
 
 def verify_blockers_active() -> bool:
     """
-    Verify that importlib.util.find_spec() returns fake modules.
-    This is the critical test - if find_spec() returns None or raises,
-    transformers/diffusers will fail when checking for bitsandbytes.
+    Verify that blockers work correctly.
+    Tests both importlib.find_spec and nested attribute access.
+    
+    Critical tests:
+    1. importlib can find fake modules
+    2. Nested attribute access works (triton.language.dtype)
+    3. Deep chains work (triton.compiler.compiler)
     """
     try:
         import importlib.util
+        import sys
         
-        # Test triton blocking
+        # Test 1: importlib can find fake modules
         spec = importlib.util.find_spec('triton')
-        if spec is not None and spec.origin == "blocked":
-            print("[IMPORT-BLOCKER] ✓ Triton properly blocked (importlib-verified)")
-            return True
+        if spec is None or spec.origin != "blocked":
+            print("[IMPORT-BLOCKER] ⚠ Triton spec verification failed")
+            return False
         
-        print("[IMPORT-BLOCKER] ⚠ Verification inconclusive (spec not properly set)")
-        return False
+        # Test 2: Module is in sys.modules
+        triton = sys.modules.get('triton')
+        if triton is None:
+            print("[IMPORT-BLOCKER] ⚠ Triton not in sys.modules")
+            return False
+        
+        # Test 3: Nested attribute access works (CRITICAL for torch._dynamo.utils)
+        test_attr = triton.language.dtype
+        if test_attr is None:
+            print("[IMPORT-BLOCKER] ⚠ triton.language.dtype returned None")
+            return False
+        
+        # Test 4: Deep compiler chain (for torch._inductor)
+        compiler_test = triton.compiler.compiler
+        if compiler_test is None:
+            print("[IMPORT-BLOCKER] ⚠ triton.compiler.compiler returned None")
+            return False
+        
+        # All tests passed
+        print("[IMPORT-BLOCKER] ✓ Triton properly blocked (importlib-verified)")
+        print("[IMPORT-BLOCKER] ✓ Nested attributes working (language.dtype, compiler.compiler)")
+        return True
         
     except ValueError as e:
         print(f"[IMPORT-BLOCKER] ⚠ ValueError during verification: {e}")
         return False
     except Exception as e:
         print(f"[IMPORT-BLOCKER] ⚠ Verification error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 

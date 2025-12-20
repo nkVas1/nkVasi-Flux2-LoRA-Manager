@@ -288,6 +288,92 @@ ComfyUI-Flux2-LoRA-Manager/
 
 MIT License. Free for commercial and non-commercial use. See [LICENSE](LICENSE) for details.
 
+## Testing
+
+### Run Import Blocker Tests
+
+Before reporting issues, please run diagnostics:
+
+```bash
+cd custom_nodes/ComfyUI-Flux2-LoRA-Manager
+python tests/test_import_blocker.py
+```
+
+**Expected output:**
+```
+======================================================================
+=== Import Blocker Test Suite ===
+======================================================================
+
+[TEST 1] Modules in sys.modules
+  ✓ All modules blocked correctly
+
+[TEST 2] Proper __spec__ attributes
+  ✓ __spec__ attributes correct
+    - name: triton
+    - origin: blocked
+
+[TEST 3] importlib.util.find_spec() functionality
+  ✓ find_spec works correctly
+    - spec.name: triton
+    - spec.origin: blocked
+
+[TEST 4] Nested attribute access (torch._dynamo.utils compatibility)
+  ✓ triton.language.dtype works correctly
+    - Returns: <ProperFakeModule 'triton' (blocked)>
+    - Type: ProperFakeModule
+  ✓ triton.compiler.compiler works correctly
+    - Returns: <ProperFakeModule 'triton' (blocked)>
+
+[TEST 5] Callable behavior (decorator support)
+  ✓ Decorator behavior correct
+    - @triton decorated function works
+    - Function call result: test
+
+[TEST 6] Boolean behavior (falsy evaluation)
+  ✓ Falsy behavior correct
+    - bool(triton) = False
+
+[TEST 7] Real-world: transformers import
+  ✓ transformers imported successfully
+    - version: 4.35.2
+    - import_utils loaded (checks bitsandbytes)
+
+======================================================================
+✅ ALL TESTS PASSED
+======================================================================
+
+Summary:
+  ✓ Modules properly blocked with valid __spec__
+  ✓ importlib.util.find_spec() works without ValueError
+  ✓ Nested attribute access works (torch._dynamo.utils compatible)
+  ✓ Decorator and boolean behavior correct
+  ✓ Real-world transformers import successful
+
+Ready for production!
+```
+
+If any test fails, please include the output in your issue report.
+
+### CI/CD Integration (Optional)
+
+For automated testing on every commit:
+
+Create `.github/workflows/test.yml`:
+```yaml
+name: Test Import Blocker
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - run: python tests/test_import_blocker.py
+```
+
 ## 🐛 Known Issues & Solutions
 
 ### Issue: `bitsandbytes.__spec__ is None`

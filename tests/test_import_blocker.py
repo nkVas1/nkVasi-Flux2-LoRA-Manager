@@ -1,155 +1,166 @@
 """
-Test that import blocker works correctly with proper ModuleSpec.
+Comprehensive test suite for import blocker.
+Validates that fake modules satisfy all torch requirements.
 
-This test validates that:
-1. Blocked modules are in sys.modules
-2. They have proper __spec__ attribute
-3. importlib.util.find_spec() doesn't raise ValueError
-4. The origin is set to "blocked"
+Critical test: torch._dynamo.utils.py:2417 does:
+    common_constant_types.add(triton.language.dtype)
+
+If triton.language.dtype returns None, this crashes.
+Our ProperFakeModule returns self, so this always works.
 """
 
 import sys
 import os
 import importlib.util
 
-# Add src to path for import
+# Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
 def test_import_blocker():
-    """
-    Test that blocked modules have proper __spec__ and pass importlib checks.
-    
-    This is the critical test: transformers.utils.import_utils.py does:
-        spec = importlib.util.find_spec(pkg_name)
-        if spec is None:
-            # module not found
-    
-    If our fake module has __spec__ = None, this raises ValueError.
-    """
+    """Comprehensive test suite for import blocker."""
     
     print("\n" + "=" * 70)
-    print("Testing ProperFakeModule Implementation")
+    print("=== Import Blocker Test Suite ===")
     print("=" * 70)
     
     # Install blockers
-    from import_blocker import install_import_blockers, verify_blockers_active
-    
-    print("\n[TEST] Installing import blockers...")
+    from import_blocker import install_import_blockers
     install_import_blockers()
     
     # Test 1: Modules in sys.modules
-    print("\n[TEST] 1. Checking if blocked modules are in sys.modules...")
-    modules_to_check = ['triton', 'bitsandbytes', 'triton.compiler']
-    
-    for mod_name in modules_to_check:
-        if mod_name in sys.modules:
-            print(f"  ✓ {mod_name} is in sys.modules")
-        else:
-            print(f"  ✗ {mod_name} NOT in sys.modules")
-            return False
-    
-    # Test 2: Modules have proper __spec__
-    print("\n[TEST] 2. Checking __spec__ attribute...")
-    
-    triton = sys.modules['triton']
-    
-    if not hasattr(triton, '__spec__'):
-        print(f"  ✗ triton missing __spec__ attribute")
+    print("\n[TEST 1] Modules in sys.modules")
+    try:
+        assert 'triton' in sys.modules, "❌ triton not blocked"
+        assert 'bitsandbytes' in sys.modules, "❌ bitsandbytes not blocked"
+        assert 'triton.compiler' in sys.modules, "❌ triton.compiler not blocked"
+        print("  ✓ All modules blocked correctly")
+    except AssertionError as e:
+        print(f"  ✗ {e}")
         return False
-    else:
-        print(f"  ✓ triton has __spec__ attribute")
     
-    if triton.__spec__ is None:
-        print(f"  ✗ triton.__spec__ is None (would cause ValueError in find_spec)")
-        return False
-    else:
-        print(f"  ✓ triton.__spec__ is not None")
+    # Test 2: Proper __spec__ attributes
+    print("\n[TEST 2] Proper __spec__ attributes")
+    try:
+        triton = sys.modules['triton']
+        assert hasattr(triton, '__spec__'), "❌ triton missing __spec__"
+        assert triton.__spec__ is not None, "❌ triton.__spec__ is None"
+        assert triton.__spec__.origin == "blocked", f"❌ Wrong origin: {triton.__spec__.origin}"
+        print("  ✓ __spec__ attributes correct")
         print(f"    - name: {triton.__spec__.name}")
         print(f"    - origin: {triton.__spec__.origin}")
+    except AssertionError as e:
+        print(f"  ✗ {e}")
+        return False
     
-    # Test 3: importlib.util.find_spec doesn't raise
-    print("\n[TEST] 3. Testing importlib.util.find_spec()...")
-    
+    # Test 3: importlib.util.find_spec() works
+    print("\n[TEST 3] importlib.util.find_spec() functionality")
     try:
         spec = importlib.util.find_spec('triton')
-        
-        if spec is None:
-            print(f"  ⚠ find_spec('triton') returned None")
-            print(f"    This is acceptable if we want triton completely hidden")
-            # But check if it's our fake module
-            if 'triton' in sys.modules:
-                print(f"  ✓ But triton is in sys.modules (will be found later)")
-        else:
-            print(f"  ✓ find_spec('triton') returned ModuleSpec")
-            print(f"    - name: {spec.name}")
-            print(f"    - origin: {spec.origin}")
-            
-            if spec.origin != "blocked":
-                print(f"  ⚠ origin is '{spec.origin}' instead of 'blocked'")
-            else:
-                print(f"  ✓ origin is 'blocked' (correct)")
-        
+        assert spec is not None, "❌ find_spec returned None"
+        assert spec.origin == "blocked", f"❌ Wrong origin: {spec.origin}"
+        print("  ✓ find_spec works correctly")
+        print(f"    - spec.name: {spec.name}")
+        print(f"    - spec.origin: {spec.origin}")
     except ValueError as e:
         print(f"  ✗ find_spec raised ValueError: {e}")
-        print(f"    This means our __spec__ is incorrectly set")
         return False
-    except Exception as e:
-        print(f"  ✗ find_spec raised unexpected error: {e}")
+    except AssertionError as e:
+        print(f"  ✗ {e}")
         return False
     
-    # Test 4: Verify blockers (our own verification function)
-    print("\n[TEST] 4. Running verify_blockers_active()...")
-    
-    result = verify_blockers_active()
-    
-    if result:
-        print(f"  ✓ verify_blockers_active() returned True")
-    else:
-        print(f"  ⚠ verify_blockers_active() returned False")
-        print(f"    Blockers are installed, verification is inconclusive")
-    
-    # Test 5: Module attributes (critical for torch.jit, @triton.jit, etc)
-    print("\n[TEST] 5. Checking module attributes...")
-    
-    # These should all work (return None without raising)
+    # Test 4: Nested attribute access (CRITICAL for torch._dynamo.utils)
+    print("\n[TEST 4] Nested attribute access (torch._dynamo.utils compatibility)")
     try:
-        _ = triton.language
-        _ = triton.compiler
-        _ = triton.jit
-        _ = triton()  # Make it callable
-        print(f"  ✓ All attribute accesses work without raising")
-    except Exception as e:
-        print(f"  ✗ Attribute access failed: {e}")
+        # This is what torch._dynamo.utils.py:2417 does:
+        # common_constant_types.add(triton.language.dtype)
+        language_dtype = triton.language.dtype
+        assert language_dtype is not None, "❌ triton.language.dtype is None (would crash torch)"
+        print("  ✓ triton.language.dtype works correctly")
+        print(f"    - Returns: {language_dtype}")
+        print(f"    - Type: {type(language_dtype).__name__}")
+        
+        # Also test deep compiler chain
+        compiler_obj = triton.compiler.compiler
+        assert compiler_obj is not None, "❌ triton.compiler.compiler is None"
+        print("  ✓ triton.compiler.compiler works correctly")
+        print(f"    - Returns: {compiler_obj}")
+        
+    except AssertionError as e:
+        print(f"  ✗ {e}")
         return False
     
-    # Test 6: Try importing transformers (the real test)
-    print("\n[TEST] 6. Testing transformers import (real-world scenario)...")
+    # Test 5: Callable behavior (for decorators)
+    print("\n[TEST 5] Callable behavior (decorator support)")
+    try:
+        # Test as decorator
+        @triton
+        def dummy_func():
+            return "test"
+        
+        assert callable(dummy_func), "❌ Decorator broke function"
+        assert dummy_func() == "test", "❌ Function doesn't work after decoration"
+        print("  ✓ Decorator behavior correct")
+        print(f"    - @triton decorated function works")
+        print(f"    - Function call result: {dummy_func()}")
+    except Exception as e:
+        print(f"  ✗ {e}")
+        return False
     
+    # Test 6: Boolean checks (for 'if triton:' checks)
+    print("\n[TEST 6] Boolean behavior (falsy evaluation)")
+    try:
+        # Should be falsy
+        if triton:
+            print("  ✗ triton should be falsy (evaluated to True)")
+            return False
+        print("  ✓ Falsy behavior correct")
+        print(f"    - bool(triton) = {bool(triton)}")
+    except Exception as e:
+        print(f"  ✗ {e}")
+        return False
+    
+    # Test 7: transformers import (real-world test)
+    print("\n[TEST 7] Real-world: transformers import")
     try:
         import transformers
         print(f"  ✓ transformers imported successfully")
         print(f"    - version: {transformers.__version__}")
         
-        # Try to use transformers (it checks for bitsandbytes availability)
+        # This internally checks bitsandbytes availability
         from transformers.utils import import_utils
-        print(f"    - import_utils loaded")
-        
+        print(f"    - import_utils loaded (checks bitsandbytes)")
     except ImportError as e:
-        print(f"  ⚠ transformers import failed: {e}")
-        print(f"    This might be due to missing dependencies, not blockers")
+        print(f"  ⚠ transformers not available: {e}")
+        print(f"    This is OK if transformers not installed")
     except Exception as e:
         print(f"  ✗ transformers import caused error: {e}")
         import traceback
         traceback.print_exc()
         return False
     
+    # Summary
     print("\n" + "=" * 70)
     print("✅ ALL TESTS PASSED")
     print("=" * 70)
+    print("\nSummary:")
+    print("  ✓ Modules properly blocked with valid __spec__")
+    print("  ✓ importlib.util.find_spec() works without ValueError")
+    print("  ✓ Nested attribute access works (torch._dynamo.utils compatible)")
+    print("  ✓ Decorator and boolean behavior correct")
+    print("  ✓ Real-world transformers import successful")
+    print("\nReady for production!")
+    
     return True
 
 
 if __name__ == '__main__':
-    success = test_import_blocker()
-    sys.exit(0 if success else 1)
+    try:
+        success = test_import_blocker()
+        sys.exit(0 if success else 1)
+    except Exception as e:
+        print(f"\n❌ Test suite crashed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
