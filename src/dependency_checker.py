@@ -54,6 +54,7 @@ class DependencyManager:
         'scipy': ('scipy', '1.11.4'),
         'pandas': ('pandas', '2.1.4'),
         'numexpr': ('numexpr', '2.9.0'),
+        'voluptuous': ('voluptuous', '0.14.2'),  # Data validation library, stable release
     }
     
     @staticmethod
