@@ -19,14 +19,41 @@ class DependencyManager:
     """Manages dependency checking and installation."""
     
     # Required packages with version constraints
+    # Senior-level approach: Comprehensive dependency list to prevent cascading errors
     REQUIRED_PACKAGES = {
+        # Core Deep Learning
         'torch': ('torch', '2.0.0'),
-        'transformers': ('transformers', '4.30.0'),
-        'diffusers': ('diffusers', '0.21.0'),
-        'accelerate': ('accelerate', '0.20.0'),
-        'safetensors': ('safetensors', '0.3.1'),
-        'toml': ('toml', None),
-        'omegaconf': ('omegaconf', None),
+        'transformers': ('transformers', '4.36.2'),
+        'diffusers': ('diffusers', '0.25.1'),
+        'accelerate': ('accelerate', '0.25.0'),
+        'safetensors': ('safetensors', '0.4.2'),
+        'huggingface_hub': ('huggingface_hub', '0.20.3'),
+        'tokenizers': ('tokenizers', '0.15.2'),
+        'peft': ('peft', '0.7.1'),
+        
+        # Configuration & Serialization
+        'toml': ('toml', '0.10.2'),
+        'omegaconf': ('omegaconf', '2.3.0'),
+        'pyyaml': ('pyyaml', '6.0.1'),
+        'packaging': ('packaging', '23.2'),
+        
+        # Utilities & Performance
+        'einops': ('einops', '0.7.0'),
+        'regex': ('regex', '2023.12.25'),
+        'requests': ('requests', '2.31.0'),
+        'tqdm': ('tqdm', '4.66.1'),
+        'filelock': ('filelock', '3.13.1'),
+        'fsspec': ('fsspec', '2023.12.2'),
+        
+        # Image Processing (CRITICAL to prevent crashes)
+        'imagesize': ('imagesize', '1.4.1'),
+        'albumentations': ('albumentations', '1.3.1'),
+        'opencv-python-headless': ('opencv-python-headless', '4.9.0.80'),
+        
+        # Scientific Computing (needed for data processing & optimization)
+        'scipy': ('scipy', '1.11.4'),
+        'pandas': ('pandas', '2.1.4'),
+        'numexpr': ('numexpr', '2.9.0'),
     }
     
     @staticmethod
