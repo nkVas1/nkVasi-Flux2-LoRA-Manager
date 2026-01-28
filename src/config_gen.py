@@ -97,23 +97,33 @@ class Flux2_8GB_Configurator:
         )
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Generate Dataset TOML configuration
+        # 1. Generate Dataset TOML configuration (CORRECTED STRUCTURE with subsets)
+        # IMPORTANT: sd-scripts validator requires 'subsets' list inside each dataset element
+        # image_dir, caption_extension, num_repeats must be INSIDE subsets, not at dataset level
         dataset_config = {
             "general": {
                 "shuffle_caption": True,
                 "keep_tokens": 1,
-                "seed": seed
+                # "seed": seed  # Removed - can cause validation issues in some versions
             },
             "datasets": [
                 {
                     "resolution": int(resolution),
                     "min_bucket_reso": 256,
                     "max_bucket_reso": int(resolution),
-                    "caption_extension": ".txt",
                     "batch_size": 1,  # STRICTLY 1 for 8GB VRAM
                     "enable_bucket_reso_steps": enable_bucket,
                     "bucket_reso_steps": 64,
-                    "image_dir": img_folder
+                    
+                    # CRITICAL FIX: subsets is required by sd-scripts validator
+                    "subsets": [
+                        {
+                            "image_dir": img_folder,
+                            "num_repeats": 10,  # Default repeats (can be made configurable later)
+                            "caption_extension": ".txt",
+                            "keep_tokens": 1
+                        }
+                    ]
                 }
             ]
         }
@@ -173,14 +183,19 @@ class Flux2_8GB_Configurator:
             "--save_precision", "bf16",
             "--gradient_checkpointing",
             "--cache_latents",
-            "--cache_latents_to_disk" if cache_to_disk else "",
+        ]
+        
+        # Add conditional cache_latents_to_disk only if enabled (cleaner than empty strings)
+        if cache_to_disk:
+            cmd.extend([
+                "--cache_latents_to_disk",
+            ])
+        
+        cmd.extend([
             "--optimizer_type", "adafactor",
             "--optimizer_args", "scale_parameter=False", "relative_step=False", "warmup_init=False",
             "--fp8_base",  # Crucial for 8GB: quantizes base model to FP8
-        ]
-
-        # Remove empty strings from command
-        cmd = [arg for arg in cmd if arg]
+        ])
 
         # CRITICAL: Return command as JSON, not as string
         # This preserves Windows paths with backslashes
