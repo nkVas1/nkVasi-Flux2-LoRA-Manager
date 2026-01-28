@@ -52,14 +52,14 @@ class StandalonePackageManager:
         'packaging': '23.2',  # version parsing
 
         # Image Processing (CRITICAL to prevent crashes)
-        'imagesize': ('imagesize', '1.4.1'),
-        'albumentations': ('albumentations', '1.3.1'),
-        'opencv-python-headless': ('opencv-python-headless', '4.9.0.80'),
+        'imagesize': '1.4.1',
+        'albumentations': '1.3.1',
+        'opencv-python-headless': '4.9.0.80',
         
         # Scientific Computing (needed for data processing & optimization)
-        'scipy': ('scipy', '1.11.4'),
-        'pandas': ('pandas', '2.1.4'),
-        'numexpr': ('numexpr', '2.9.0'),
+        'scipy': '1.11.4',
+        'pandas': '2.1.4',
+        'numexpr': '2.9.0',
     }
     
     def __init__(self, base_dir: Optional[str] = None):
