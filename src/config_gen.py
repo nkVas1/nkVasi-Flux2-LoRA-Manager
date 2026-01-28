@@ -67,6 +67,13 @@ class Flux2_8GB_Configurator:
                 "lora_rank": (["16", "32"], {"default": "16"}),
             },
             "optional": {
+                "num_repeats": ("INT", {
+                    "default": 10,
+                    "min": 1,
+                    "max": 100,
+                    "step": 1,
+                    "display": "number"
+                }),
                 "enable_bucket": ("BOOLEAN", {"default": True}),
                 "seed": ("INT", {"default": 42}),
                 "cache_to_disk": ("BOOLEAN", {"default": True}),
@@ -83,6 +90,7 @@ class Flux2_8GB_Configurator:
         learning_rate,
         max_train_steps,
         lora_rank,
+        num_repeats=10,
         enable_bucket=True,
         seed=42,
         cache_to_disk=True,
@@ -97,14 +105,14 @@ class Flux2_8GB_Configurator:
         )
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Generate Dataset TOML configuration (CORRECTED STRUCTURE with subsets)
-        # IMPORTANT: sd-scripts validator requires 'subsets' list inside each dataset element
-        # image_dir, caption_extension, num_repeats must be INSIDE subsets, not at dataset level
+        # 1. Generate Dataset TOML configuration
+        # Structure follows official kohya-ss/sd-scripts format (2025)
+        # Reference: https://github.com/kohya-ss/sd-scripts/blob/main/docs/config_README-en.md
         dataset_config = {
             "general": {
                 "shuffle_caption": True,
                 "keep_tokens": 1,
-                # "seed": seed  # Removed - can cause validation issues in some versions
+                "enable_bucket": enable_bucket,
             },
             "datasets": [
                 {
@@ -112,31 +120,41 @@ class Flux2_8GB_Configurator:
                     "min_bucket_reso": 256,
                     "max_bucket_reso": int(resolution),
                     "batch_size": 1,  # STRICTLY 1 for 8GB VRAM
-                    "enable_bucket_reso_steps": enable_bucket,
                     "bucket_reso_steps": 64,
+                    "bucket_no_upscale": False,  # Allow upscaling if needed
                     
-                    # CRITICAL FIX: subsets is required by sd-scripts validator
+                    # Subsets contain only dataset-specific info (not training params)
                     "subsets": [
                         {
                             "image_dir": img_folder,
-                            "num_repeats": 10,  # Default repeats (can be made configurable later)
+                            "num_repeats": num_repeats,
                             "caption_extension": ".txt",
-                            "keep_tokens": 1
                         }
                     ]
                 }
             ]
         }
 
-        # Save TOML config
+        # Save TOML config (with error handling)
         toml_path = os.path.join(output_dir, "dataset.toml")
-        if toml:
-            with open(toml_path, "w", encoding='utf-8') as f:
-                toml.dump(dataset_config, f)
-        else:
-            # Fallback: save as JSON with .toml extension
-            with open(toml_path, "w", encoding='utf-8') as f:
-                json.dump(dataset_config, f, indent=2)
+        try:
+            if toml:
+                with open(toml_path, "w", encoding='utf-8') as f:
+                    toml.dump(dataset_config, f)
+                print(f"[CONFIG-GEN] ✓ Saved TOML config: {toml_path}")
+            else:
+                # CRITICAL: Install toml if missing
+                print("[CONFIG-GEN] ⚠ toml library not found, installing...")
+                import subprocess
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "toml", "--quiet"])
+                import toml as toml_installed
+                with open(toml_path, "w", encoding='utf-8') as f:
+                    toml_installed.dump(dataset_config, f)
+                print(f"[CONFIG-GEN] ✓ Installed toml and saved config: {toml_path}")
+        except Exception as e:
+            error_msg = f"ERROR: Failed to save dataset config: {e}"
+            print(f"[CONFIG-GEN] {error_msg}")
+            return (error_msg, "", "")
 
         # 2. Validate script path BEFORE attempting to build command
         script_path = os.path.join(sd_scripts_path, "flux_train_network.py")

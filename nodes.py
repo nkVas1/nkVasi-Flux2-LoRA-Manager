@@ -498,6 +498,122 @@ class InitFluxLoRATraining:
 # ============================================================================
 # Node Registration Dictionary
 # ============================================================================
+# Configuration Validator Node (for debugging and maintenance)
+# ============================================================================
+
+class Flux2_ConfigValidator:
+    """
+    Validates dataset.toml configuration files for correctness.
+    Useful for debugging configuration errors before training.
+    
+    Features:
+    - Validates against official sd-scripts schema
+    - Detects deprecated parameters
+    - Can automatically fix common errors
+    - Provides detailed error messages
+    """
+    
+    CATEGORY = "Flux2/Config"
+    RETURN_TYPES = ("STRING", "BOOLEAN")
+    RETURN_NAMES = ("validation_result", "is_valid")
+    FUNCTION = "validate_config"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "toml_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "placeholder": "Path to dataset.toml"
+                }),
+                "auto_fix": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "Auto-Fix Errors",
+                    "label_off": "Validate Only"
+                }),
+            }
+        }
+
+    def validate_config(self, toml_path: str, auto_fix: bool):
+        """
+        Validate and optionally fix configuration file.
+        
+        Args:
+            toml_path: Path to dataset.toml file
+            auto_fix: If True, attempt to automatically fix common errors
+            
+        Returns:
+            Tuple of (result_message, is_valid)
+        """
+        import os
+        
+        try:
+            from .src.config_validator import ConfigValidator
+            import toml
+            
+            # Validate path exists
+            if not toml_path or not os.path.exists(toml_path):
+                return (f"❌ File not found: {toml_path}", False)
+            
+            # Validate configuration
+            is_valid, errors = ConfigValidator.validate_file(toml_path)
+            
+            if is_valid:
+                return ("✅ Configuration is valid! Ready for training.", True)
+            
+            # Format errors
+            error_lines = [f"  {idx + 1}. {err}" for idx, err in enumerate(errors)]
+            error_text = "\n".join(error_lines)
+            result = f"❌ Validation failed ({len(errors)} issues):\n{error_text}"
+            
+            # Auto-fix if requested
+            if auto_fix:
+                try:
+                    with open(toml_path, 'r', encoding='utf-8') as f:
+                        config = toml.load(f)
+                    
+                    fixed_config, changes = ConfigValidator.auto_fix_config(config)
+                    
+                    if changes:
+                        # Create backup
+                        backup_path = toml_path + ".backup"
+                        import shutil
+                        shutil.copy2(toml_path, backup_path)
+                        
+                        # Save fixed version
+                        with open(toml_path, 'w', encoding='utf-8') as f:
+                            toml.dump(fixed_config, f)
+                        
+                        changes_text = "\n".join([f"  - {ch}" for ch in changes])
+                        result += f"\n\n✅ Auto-fix applied:\n{changes_text}"
+                        result += f"\n\nBackup saved: {backup_path}"
+                        
+                        # Re-validate
+                        is_valid_after, remaining_errors = ConfigValidator.validate_config(fixed_config)
+                        if is_valid_after:
+                            result += "\n\n✅ Configuration is now valid!"
+                            return (result, True)
+                        else:
+                            result += f"\n\n⚠ {len(remaining_errors)} issue(s) remain after auto-fix"
+                            remaining_text = "\n".join([f"  - {err}" for err in remaining_errors])
+                            result += f"\n{remaining_text}"
+                    else:
+                        result += "\n\n⚠ No automatic fixes available"
+                        
+                except Exception as e:
+                    result += f"\n\n❌ Auto-fix failed: {e}"
+            
+            return (result, False)
+            
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            return (f"❌ Validator error: {e}\n\n{error_detail}", False)
+
+
+# ============================================================================
 
 NODE_CLASS_MAPPINGS = {
     # Original nodes
@@ -505,7 +621,10 @@ NODE_CLASS_MAPPINGS = {
     "Flux2_Run_External": Flux2_Runner,
     "Flux2_Stop": Flux2_Stopper,
     
-    # New modular nodes (ЕТАП Б - Senior Architecture)
+    # Config validation node
+    "Flux2_ConfigValidator": Flux2_ConfigValidator,
+    
+    # New modular nodes (ЭТАП 2 - Senior Architecture)
     "FluxTrainModelSelect": FluxTrainModelSelect,
     "FluxTrainDatasetConfig": FluxTrainDatasetConfig,
     "FluxTrainValidationSettings": FluxTrainValidationSettings,
@@ -519,6 +638,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Flux2_Run_External": "🚀 Start Training (External)",
     "Flux2_Stop": "🛑 Emergency Stop",
     
+    # Config validation node
+    "Flux2_ConfigValidator": "✅ FLUX.2 Config Validator",
     # New modular nodes (OpenArt-compatible architecture)
     "FluxTrainModelSelect": "🤖 Flux Model Selector",
     "FluxTrainDatasetConfig": "📁 Flux Dataset Config",
