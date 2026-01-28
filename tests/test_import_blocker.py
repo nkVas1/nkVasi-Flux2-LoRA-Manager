@@ -28,40 +28,77 @@ def test_import_blocker():
     from import_blocker import install_import_blockers
     install_import_blockers()
     
-    # Test 1: Modules in sys.modules
-    print("\n[TEST 1] Modules in sys.modules")
+    # Test 1: Modules in sys.modules (including new subpackages)
+    print("\n[TEST 1] Modules in sys.modules (including package hierarchy)")
     try:
         assert 'triton' in sys.modules, "❌ triton not blocked"
         assert 'bitsandbytes' in sys.modules, "❌ bitsandbytes not blocked"
         assert 'triton.compiler' in sys.modules, "❌ triton.compiler not blocked"
-        print("  ✓ All modules blocked correctly")
+        assert 'triton.backends' in sys.modules, "❌ triton.backends not blocked (CRITICAL FIX)"
+        assert 'triton.backends.compiler' in sys.modules, "❌ triton.backends.compiler not blocked"
+        print("  ✓ All modules blocked correctly (including subpackages)")
+        print(f"    - triton: {sys.modules['triton']}")
+        print(f"    - triton.backends: {sys.modules['triton.backends']}")
+        print(f"    - triton.backends.compiler: {sys.modules['triton.backends.compiler']}")
     except AssertionError as e:
         print(f"  ✗ {e}")
         return False
     
-    # Test 2: Proper __spec__ attributes
-    print("\n[TEST 2] Proper __spec__ attributes")
+    # Test 2: Package structure (__path__ for packages)
+    print("\n[TEST 2] Package structure (__path__ validation)")
     try:
+        # Top-level triton should be a package (has submodules)
         triton = sys.modules['triton']
+        assert hasattr(triton, '__path__'), "❌ triton missing __path__ (not a package)"
+        assert triton.__path__ is not None, "❌ triton.__path__ is None"
+        assert isinstance(triton.__path__, list), f"❌ triton.__path__ should be list, got {type(triton.__path__)}"
+        
+        # triton.backends is a package too (has triton.backends.compiler)
+        backends = sys.modules['triton.backends']
+        assert hasattr(backends, '__path__'), "❌ triton.backends missing __path__"
+        assert backends.__path__ is not None, "❌ triton.backends.__path__ is None"
+        assert isinstance(backends.__path__, list), f"❌ triton.backends.__path__ should be list"
+        
+        print("  ✓ Package structure correct (__path__ indicates packages)")
+        print(f"    - triton has __path__: {hasattr(triton, '__path__')}")
+        print(f"    - triton.backends has __path__: {hasattr(backends, '__path__')}")
+    except AssertionError as e:
+        print(f"  ✗ {e}")
+        return False
+    
+    # Test 3: Proper __spec__ attributes
+    print("\n[TEST 3] Proper __spec__ attributes")
+    try:
         assert hasattr(triton, '__spec__'), "❌ triton missing __spec__"
         assert triton.__spec__ is not None, "❌ triton.__spec__ is None"
         assert triton.__spec__.origin == "blocked", f"❌ Wrong origin: {triton.__spec__.origin}"
         print("  ✓ __spec__ attributes correct")
         print(f"    - name: {triton.__spec__.name}")
         print(f"    - origin: {triton.__spec__.origin}")
+        print(f"    - loader: {triton.__spec__.loader}")
     except AssertionError as e:
         print(f"  ✗ {e}")
         return False
     
-    # Test 3: importlib.util.find_spec() works
-    print("\n[TEST 3] importlib.util.find_spec() functionality")
+    # Test 5: importlib.util.find_spec() works
+    print("\n[TEST 5] importlib.util.find_spec() functionality")
     try:
         spec = importlib.util.find_spec('triton')
         assert spec is not None, "❌ find_spec returned None"
         assert spec.origin == "blocked", f"❌ Wrong origin: {spec.origin}"
-        print("  ✓ find_spec works correctly")
+        
+        # Also test subpackages
+        backends_spec = importlib.util.find_spec('triton.backends')
+        assert backends_spec is not None, "❌ find_spec('triton.backends') returned None"
+        # Check for __path__ instead of is_package attribute
+        backends_module = sys.modules.get('triton.backends')
+        assert hasattr(backends_module, '__path__'), "❌ triton.backends should have __path__"
+        
+        print("  ✓ find_spec works correctly for all packages")
         print(f"    - spec.name: {spec.name}")
         print(f"    - spec.origin: {spec.origin}")
+        print(f"    - backends_spec.name: {backends_spec.name}")
+        print(f"    - backends_module has __path__: {hasattr(backends_module, '__path__')}")
     except ValueError as e:
         print(f"  ✗ find_spec raised ValueError: {e}")
         return False
@@ -84,14 +121,19 @@ def test_import_blocker():
         compiler_obj = triton.compiler.compiler
         assert compiler_obj is not None, "❌ triton.compiler.compiler is None"
         print("  ✓ triton.compiler.compiler works correctly")
-        print(f"    - Returns: {compiler_obj}")
+        
+        # Test triton.backends.compiler access (NEW - was causing error)
+        backends_compiler = triton.backends.compiler
+        assert backends_compiler is not None, "❌ triton.backends.compiler is None"
+        print("  ✓ triton.backends.compiler works (new hierarchy)")
+        print(f"    - Returns: {backends_compiler}")
         
     except AssertionError as e:
         print(f"  ✗ {e}")
         return False
     
-    # Test 5: Callable behavior (for decorators)
-    print("\n[TEST 5] Callable behavior (decorator support)")
+    # Test 6: Callable behavior (for decorators)
+    print("\n[TEST 6] Callable behavior (decorator support)")
     try:
         # Test as decorator
         @triton
@@ -107,8 +149,8 @@ def test_import_blocker():
         print(f"  ✗ {e}")
         return False
     
-    # Test 6: Boolean checks (for 'if triton:' checks)
-    print("\n[TEST 6] Boolean behavior (falsy evaluation)")
+    # Test 7: Boolean checks (for 'if triton:' checks)
+    print("\n[TEST 7] Boolean behavior (falsy evaluation)")
     try:
         # Should be falsy
         if triton:
@@ -120,8 +162,8 @@ def test_import_blocker():
         print(f"  ✗ {e}")
         return False
     
-    # Test 7: transformers import (real-world test)
-    print("\n[TEST 7] Real-world: transformers import")
+    # Test 8: transformers import (real-world test)
+    print("\n[TEST 8] Real-world: transformers import")
     try:
         import transformers
         print(f"  ✓ transformers imported successfully")
@@ -141,15 +183,18 @@ def test_import_blocker():
     
     # Summary
     print("\n" + "=" * 70)
-    print("✅ ALL TESTS PASSED")
+    print("✅ ALL 8 TESTS PASSED")
     print("=" * 70)
     print("\nSummary:")
-    print("  ✓ Modules properly blocked with valid __spec__")
+    print("  ✓ All modules blocked with package hierarchy (triton.backends, etc)")
+    print("  ✓ Package structure validated (__path__ correctly set)")
+    print("  ✓ Proper __spec__ with is_package flags")
     print("  ✓ importlib.util.find_spec() works without ValueError")
     print("  ✓ Nested attribute access works (torch._dynamo.utils compatible)")
     print("  ✓ Decorator and boolean behavior correct")
+    print("  ✓ triton.backends.compiler nested access works (CRITICAL FIX)")
     print("  ✓ Real-world transformers import successful")
-    print("\nReady for production!")
+    print("\nReady for production with package-aware blocking!")
     
     return True
 

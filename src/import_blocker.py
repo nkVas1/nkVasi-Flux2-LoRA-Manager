@@ -1,10 +1,9 @@
 """
-Production-grade import blocker with proper ModuleSpec.
-Ensures blocked modules are invisible to importlib.util.find_spec().
+Production-grade import blocker with Package Support.
+Fixes 'No module named triton.backends' on Windows.
 
-Key insight: transformers checks module availability using importlib.util.find_spec().
-If a module has __spec__ = None, find_spec() raises ValueError.
-Our ProperFakeModule includes proper ModuleSpec to avoid this.
+Key insight: PyTorch tries to import nested submodules like triton.backends.
+We must block ALL possible submodule paths, not just top-level modules.
 """
 
 import sys
@@ -18,17 +17,16 @@ _BLOCKERS_INSTALLED = False
 
 class ProperFakeModule(ModuleType):
     """
-    Production-grade fake module with nested attribute support.
-    Returns self for ALL attribute access to satisfy deep chains like:
-    triton.language.dtype, triton.compiler.compiler.AttrsDescriptor
+    Fake module that can act as a package (folder) or a module (file).
     
-    CRITICAL: torch._dynamo.utils.py:2417 does:
-        common_constant_types.add(triton.language.dtype)
-    If triton.language.dtype returns None, this crashes.
-    Our solution: __getattr__ returns self, so any chain always returns a module object.
+    - If is_package=True: has __path__ = [] (can have submodules)
+    - If is_package=False: __path__ = None (terminal module)
+    
+    Critical: Returns self for ALL attribute access (nested chains like
+    triton.language.dtype work correctly).
     """
     
-    def __init__(self, name):
+    def __init__(self, name, is_package=False):
         super().__init__(name)
         
         # Create proper __spec__ for importlib
@@ -36,128 +34,141 @@ class ProperFakeModule(ModuleType):
             name=name,
             loader=None,
             origin="blocked",
-            is_package=False
+            is_package=is_package
         )
         
         self.__file__ = None
-        self.__path__ = None
-        self.__package__ = name.rpartition('.')[0] if '.' in name else ''
+        
+        # If it's a package, it needs a __path__ (list of search paths)
+        # This tells Python "this module can have submodules"
+        if is_package:
+            self.__path__ = []
+            self.__package__ = name
+        else:
+            self.__path__ = None
+            self.__package__ = name.rpartition('.')[0] if '.' in name else ''
     
     def __getattr__(self, item):
         """
-        CRITICAL: Return self (not None) for nested attribute access.
-        This allows triton.language.dtype to work:
-        - triton.language -> returns self
-        - (self).dtype -> returns self
-        Result: triton.language.dtype = self (an object, not None)
+        Return self for any attribute access.
+        Allows chains like triton.language.dtype to work.
+        Ensures torch._dynamo.utils:2417 doesn't crash.
         """
         return self
     
     def __call__(self, *args, **kwargs):
         """Make callable (for decorators like @triton.jit)."""
-        # If called with a function, return it unchanged (decorator pattern)
         if args and callable(args[0]):
             return args[0]
-        # Otherwise return a dummy wrapper
-        def wrapper(func):
-            return func
-        return wrapper
+        return lambda x: x
     
     def __bool__(self):
-        """Make falsy for checks like 'if triton:'"""
+        """Falsy for 'if triton:' checks."""
         return False
     
     def __repr__(self):
-        """Clear representation showing it's a fake module."""
-        return f"<ProperFakeModule '{self.__name__}' (blocked)>"
+        """Clear representation."""
+        pkg_str = " (package)" if self.__path__ is not None else ""
+        return f"<ProperFakeModule '{self.__name__}'{pkg_str} (blocked)>"
 
 
 def install_import_blockers():
     """
-    Install production-grade import blockers.
-    These modules have proper __spec__ and pass importlib checks.
+    Install blockers including nested subpackages like triton.backends.
+    
+    Critical modules to block:
+    - triton (top package)
+    - triton.language (submodule)
+    - triton.compiler (subpackage)
+    - triton.compiler.compiler (nested submodule)
+    - triton.backends (NEW: subpackage, was causing 'No module named' error)
+    - triton.backends.compiler (nested under backends)
+    - triton.runtime (submodule)
+    - bitsandbytes (top package)
+    - bitsandbytes.nn (submodule)
+    - bitsandbytes.optim (submodule)
     """
     global _BLOCKERS_INSTALLED
     
     if _BLOCKERS_INSTALLED:
         return
     
-    print("[IMPORT-BLOCKER] Installing production import blockers...")
+    print("[IMPORT-BLOCKER] Installing production import blockers (Package-Aware)...")
     
-    # Block problematic modules with proper fake modules
-    blocked_modules = [
+    # List of all modules to block.
+    # Order doesn't matter much, but we must list ALL possible imports.
+    targets = [
         'triton',
         'triton.language',
         'triton.compiler',
         'triton.compiler.compiler',
         'triton.runtime',
+        'triton.backends',          # <--- CRITICAL FIX: Was missing
+        'triton.backends.compiler', # <--- CRITICAL FIX: Was missing
         'bitsandbytes',
         'bitsandbytes.nn',
         'bitsandbytes.optim',
     ]
     
-    for mod_name in blocked_modules:
-        if mod_name not in sys.modules:
-            fake_mod = ProperFakeModule(mod_name)
-            sys.modules[mod_name] = fake_mod
-            print(f"[IMPORT-BLOCKER]   ✓ Blocked {mod_name}")
+    for name in targets:
+        # Check if any other target starts with "name." 
+        # If yes, then "name" is a package (has submodules)
+        is_pkg = any(t.startswith(name + ".") for t in targets)
+        
+        if name not in sys.modules:
+            fake = ProperFakeModule(name, is_package=is_pkg)
+            sys.modules[name] = fake
+            pkg_type = "package" if is_pkg else "module"
+            print(f"[IMPORT-BLOCKER]   ✓ Blocked {name} ({pkg_type})")
     
-    # Environment variables for extra safety
+    # Environment variables to discourage PyTorch from looking for triton
     os.environ["TRITON_ENABLED"] = "0"
     os.environ["DISABLE_TRITON"] = "1"
     os.environ["TORCH_COMPILE_DISABLE"] = "1"
     os.environ["TORCH_INDUCTOR_DISABLE"] = "1"
     
     _BLOCKERS_INSTALLED = True
-    print("[IMPORT-BLOCKER] ✓ All blockers installed with proper __spec__")
+    print("[IMPORT-BLOCKER] ✓ All blockers installed with package support")
 
 
 def verify_blockers_active() -> bool:
     """
     Verify that blockers work correctly.
-    Tests both importlib.find_spec and nested attribute access.
-    
-    Critical tests:
-    1. importlib can find fake modules
-    2. Nested attribute access works (triton.language.dtype)
-    3. Deep chains work (triton.compiler.compiler)
+    Tests:
+    1. Basic modules in sys.modules
+    2. Subpackages like triton.backends exist
+    3. Nested attribute access works
     """
     try:
-        import importlib.util
         import sys
         
-        # Test 1: importlib can find fake modules
-        spec = importlib.util.find_spec('triton')
-        if spec is None or spec.origin != "blocked":
-            print("[IMPORT-BLOCKER] ⚠ Triton spec verification failed")
+        # Test 1: Top-level modules
+        if sys.modules.get('triton') is None:
+            print("[IMPORT-BLOCKER] ⚠ triton not in sys.modules")
             return False
         
-        # Test 2: Module is in sys.modules
-        triton = sys.modules.get('triton')
-        if triton is None:
-            print("[IMPORT-BLOCKER] ⚠ Triton not in sys.modules")
+        # Test 2: Subpackage (critical fix)
+        if sys.modules.get('triton.backends') is None:
+            print("[IMPORT-BLOCKER] ⚠ triton.backends missing (critical for torch._inductor)")
             return False
         
-        # Test 3: Nested attribute access works (CRITICAL for torch._dynamo.utils)
-        test_attr = triton.language.dtype
-        if test_attr is None:
-            print("[IMPORT-BLOCKER] ⚠ triton.language.dtype returned None")
+        # Test 3: Nested submodule
+        if sys.modules.get('triton.backends.compiler') is None:
+            print("[IMPORT-BLOCKER] ⚠ triton.backends.compiler missing")
             return False
         
-        # Test 4: Deep compiler chain (for torch._inductor)
-        compiler_test = triton.compiler.compiler
-        if compiler_test is None:
-            print("[IMPORT-BLOCKER] ⚠ triton.compiler.compiler returned None")
+        # Test 4: Nested attribute access (torch._dynamo.utils compatibility)
+        triton_mod = sys.modules['triton']
+        if triton_mod.language.dtype is None:
+            print("[IMPORT-BLOCKER] ⚠ triton.language.dtype is None")
             return False
         
         # All tests passed
-        print("[IMPORT-BLOCKER] ✓ Triton properly blocked (importlib-verified)")
-        print("[IMPORT-BLOCKER] ✓ Nested attributes working (language.dtype, compiler.compiler)")
+        print("[IMPORT-BLOCKER] ✓ All blockers verified")
+        print("[IMPORT-BLOCKER] ✓ Package hierarchy intact (triton.backends, etc)")
+        print("[IMPORT-BLOCKER] ✓ Nested attributes working (language.dtype)")
         return True
         
-    except ValueError as e:
-        print(f"[IMPORT-BLOCKER] ⚠ ValueError during verification: {e}")
-        return False
     except Exception as e:
         print(f"[IMPORT-BLOCKER] ⚠ Verification error: {e}")
         import traceback
@@ -166,5 +177,5 @@ def verify_blockers_active() -> bool:
 
 
 def patch_diffusers_quantizers():
-    """No longer needed with proper fake modules."""
+    """Placeholder for diffusers patching (no longer needed)."""
     pass
