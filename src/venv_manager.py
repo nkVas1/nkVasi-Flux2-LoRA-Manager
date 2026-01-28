@@ -50,6 +50,16 @@ class StandalonePackageManager:
         'filelock': '3.13.1',  # huggingface_hub dependency
         'fsspec': '2023.12.2',  # file system abstraction
         'packaging': '23.2',  # version parsing
+
+        # Image Processing (CRITICAL to prevent crashes)
+        'imagesize': ('imagesize', '1.4.1'),
+        'albumentations': ('albumentations', '1.3.1'),
+        'opencv-python-headless': ('opencv-python-headless', '4.9.0.80'),
+        
+        # Scientific Computing (needed for data processing & optimization)
+        'scipy': ('scipy', '1.11.4'),
+        'pandas': ('pandas', '2.1.4'),
+        'numexpr': ('numexpr', '2.9.0'),
     }
     
     def __init__(self, base_dir: Optional[str] = None):
