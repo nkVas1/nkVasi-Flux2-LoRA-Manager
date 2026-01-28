@@ -60,6 +60,7 @@ class StandalonePackageManager:
         'scipy': '1.11.4',
         'pandas': '2.1.4',
         'numexpr': '2.9.0',
+        'voluptuous': '0.14.2',  # Data validation library, stable release
     }
     
     def __init__(self, base_dir: Optional[str] = None):
