@@ -29,17 +29,19 @@ def test_import_blocker():
     install_import_blockers()
     
     # Test 1: Modules in sys.modules (including new subpackages)
-    print("\n[TEST 1] Modules in sys.modules (including package hierarchy)")
+    print("\n[TEST 1] Modules in sys.modules (including xformers blocking)")
     try:
         assert 'triton' in sys.modules, "❌ triton not blocked"
         assert 'bitsandbytes' in sys.modules, "❌ bitsandbytes not blocked"
         assert 'triton.compiler' in sys.modules, "❌ triton.compiler not blocked"
         assert 'triton.backends' in sys.modules, "❌ triton.backends not blocked (CRITICAL FIX)"
         assert 'triton.backends.compiler' in sys.modules, "❌ triton.backends.compiler not blocked"
-        print("  ✓ All modules blocked correctly (including subpackages)")
+        assert 'xformers' in sys.modules, "❌ xformers not blocked (DLL issue fix)"
+        assert 'xformers.ops' in sys.modules, "❌ xformers.ops not blocked"
+        print("  ✓ All modules blocked correctly (including xformers)")
         print(f"    - triton: {sys.modules['triton']}")
         print(f"    - triton.backends: {sys.modules['triton.backends']}")
-        print(f"    - triton.backends.compiler: {sys.modules['triton.backends.compiler']}")
+        print(f"    - xformers: {sys.modules['xformers']} (forces sdpa fallback)")
     except AssertionError as e:
         print(f"  ✗ {e}")
         return False
@@ -187,14 +189,17 @@ def test_import_blocker():
     print("=" * 70)
     print("\nSummary:")
     print("  ✓ All modules blocked with package hierarchy (triton.backends, etc)")
+    print("  ✓ xformers and xformers.ops blocked (DLL load issue resolved)")
     print("  ✓ Package structure validated (__path__ correctly set)")
-    print("  ✓ Proper __spec__ with is_package flags")
+    print("  ✓ Proper __spec__ attributes")
     print("  ✓ importlib.util.find_spec() works without ValueError")
     print("  ✓ Nested attribute access works (torch._dynamo.utils compatible)")
     print("  ✓ Decorator and boolean behavior correct")
-    print("  ✓ triton.backends.compiler nested access works (CRITICAL FIX)")
     print("  ✓ Real-world transformers import successful")
-    print("\nReady for production with package-aware blocking!")
+    print("\nReady for production with:")
+    print("  - Package-aware module blocking")
+    print("  - xformers DLL issue fixed (forces sdpa fallback)")
+    print("  - diffusers will use native PyTorch attention instead")
     
     return True
 

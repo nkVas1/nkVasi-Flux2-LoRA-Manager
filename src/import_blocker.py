@@ -81,12 +81,14 @@ def install_import_blockers():
     - triton.language (submodule)
     - triton.compiler (subpackage)
     - triton.compiler.compiler (nested submodule)
-    - triton.backends (NEW: subpackage, was causing 'No module named' error)
+    - triton.backends (subpackage, was causing 'No module named' error)
     - triton.backends.compiler (nested under backends)
     - triton.runtime (submodule)
     - bitsandbytes (top package)
     - bitsandbytes.nn (submodule)
     - bitsandbytes.optim (submodule)
+    - xformers (broken DLL load issue on Windows)
+    - xformers.ops (forces diffusers to use standard sdpa attention)
     """
     global _BLOCKERS_INSTALLED
     
@@ -108,6 +110,8 @@ def install_import_blockers():
         'bitsandbytes',
         'bitsandbytes.nn',
         'bitsandbytes.optim',
+        'xformers',                 # <--- NEW: Block broken xformers DLL issue
+        'xformers.ops',             # <--- NEW: Forces diffusers to use sdpa instead
     ]
     
     for name in targets:
