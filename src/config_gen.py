@@ -156,13 +156,33 @@ class Flux2_8GB_Configurator:
             print(f"[CONFIG-GEN] {error_msg}")
             return (error_msg, "", "")
 
-        # 2. Validate script path BEFORE attempting to build command
-        script_path = os.path.join(sd_scripts_path, "flux_train_network.py")
-        if not os.path.exists(script_path):
-            error_msg = f"ERROR: Script not found at: {script_path}\nEnsure 'sd-scripts' is installed at: {sd_scripts_path}"
-            return (error_msg, "", "")
+        # 2. Detect Flux.2 vs Flux.1 based on model path
+        # Flux.2 requires dedicated trainer (different architecture)
+        is_flux2 = False
+        if "flux2" in model_path.lower() or "flux.2" in model_path.lower():
+            is_flux2 = True
+            print("[CONFIG-GEN] ✓ Detected Flux.2 model - using dedicated trainer")
+        
+        # 3. Select appropriate training script
+        if is_flux2:
+            # Use Flux.2 dedicated trainer from our codebase
+            # This script is located relative to this file
+            import sys
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            script_path = os.path.join(current_dir, "flux2_support", "flux2_train.py")
+            if not os.path.exists(script_path):
+                error_msg = f"ERROR: Flux.2 trainer not found at: {script_path}"
+                return (error_msg, "", "")
+            print(f"[CONFIG-GEN] ✓ Using Flux.2 trainer: {script_path}")
+        else:
+            # Use standard sd-scripts trainer for Flux.1
+            script_path = os.path.join(sd_scripts_path, "flux_train_network.py")
+            if not os.path.exists(script_path):
+                error_msg = f"ERROR: Script not found at: {script_path}\nEnsure 'sd-scripts' is installed at: {sd_scripts_path}"
+                return (error_msg, "", "")
+            print(f"[CONFIG-GEN] ✓ Using Flux.1 trainer: {script_path}")
 
-        # 3. Validate Python interpreter exists (critical for Windows subprocess)
+        # 4. Validate Python interpreter exists (critical for Windows subprocess)
         import sys
         python_exe = sys.executable
         
@@ -170,7 +190,7 @@ class Flux2_8GB_Configurator:
             error_msg = f"ERROR: Python interpreter not found at: {python_exe}"
             return (error_msg, "", "")
 
-        # 4. Build command arguments optimized for RTX 3060 Ti (8GB)
+        # 5. Build command arguments optimized for RTX 3060 Ti (8GB)
         # CRITICAL FOR WINDOWS: Pass command as JSON list, NOT as string
         # This preserves backslashes in paths (G:\ComfyUI\... won't get mangled)
         # 
