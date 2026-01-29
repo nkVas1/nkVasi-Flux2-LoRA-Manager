@@ -234,6 +234,7 @@ class Flux2_8GB_Configurator:
             "--network_dim", str(lora_rank),  # Ensure string type
             "--network_alpha", str(lora_rank),
             "--network_module", "networks.lora",  # CRITICAL: Required by kohya/sd-scripts
+            "--network_train_unet_only",  # Train only DiT/UNet, not Text Encoders (standard for Flux)
 
             # --- VRAM SAVING STRATEGY ---
             "--mixed_precision", "bf16",

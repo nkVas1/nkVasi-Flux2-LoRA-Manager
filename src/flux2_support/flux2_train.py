@@ -20,70 +20,70 @@ Usage:
 import sys
 import os
 import argparse
-import logging
-import torch
 
-# === PHASE 2+4: Setup training_libs and sd-scripts paths FIRST ===
-# CRITICAL: This must happen BEFORE any other imports
-# Save original paths to preserve access to standard libraries
-original_sys_path = list(sys.path)
-
-# 1. Get the project root and training_libs directory
-current_file_path = os.path.abspath(__file__)
-# Navigate: src/flux2_support/flux2_train.py -> src -> ComfyUI-Flux2-LoRA-Manager
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
+# === КРИТИЧЕСКИ ВАЖНО: Добавить training_libs ДО всех импортов ===
+# Получаем путь к текущему файлу и идем вверх к корню проекта
+current_file = os.path.abspath(__file__)
+# flux2_train.py -> flux2_support -> src -> ComfyUI-Flux2-LoRA-Manager
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
 training_libs_path = os.path.join(project_root, "training_libs")
 
-# 2. Pre-load local training_libs (where ComfyUI's package manager installs packages)
 if os.path.exists(training_libs_path):
-    print(f"[FLUX2_TRAIN] Pre-loading training_libs from: {training_libs_path}")
+    # Добавляем в НАЧАЛО sys.path, чтобы перебить все конфликты
     sys.path.insert(0, training_libs_path)
+    print(f"[FLUX2_TRAIN] ✓ training_libs added: {training_libs_path}")
 else:
     print(f"[FLUX2_TRAIN] ⚠ training_libs not found at: {training_libs_path}")
+    print("[FLUX2_TRAIN] Attempting fallback to system packages...")
 
-# 3. Parse sd_scripts_dir argument (early, before other imports)
-parser_early = argparse.ArgumentParser(add_help=False)
-parser_early.add_argument("--sd_scripts_dir", type=str, default="")
-args_early, remaining = parser_early.parse_known_args()
-
-# 4. Add sd-scripts to path with proper priority
-if args_early.sd_scripts_dir and os.path.exists(args_early.sd_scripts_dir):
-    print(f"[FLUX2_TRAIN] Setting up sd-scripts path: {args_early.sd_scripts_dir}")
-    library_path = os.path.join(args_early.sd_scripts_dir, "library")
-    
-    # Add paths - append to preserve training_libs priority
-    if args_early.sd_scripts_dir not in sys.path:
-        sys.path.append(args_early.sd_scripts_dir)
-    if library_path not in sys.path:
-        sys.path.append(library_path)
-    
-    # Ensure current script directory is in path
-    current_dir = os.path.dirname(current_file_path)
-    if current_dir not in sys.path:
-        sys.path.insert(1, current_dir)  # After training_libs but before others
-else:
-    print("[FLUX2_TRAIN] WARNING: --sd_scripts_dir not provided or invalid")
-    print("[FLUX2_TRAIN] Attempting to import from default PYTHONPATH")
-
-# 5. Check for imagesize module (critical dependency)
+# Проверка imagesize ПОСЛЕ добавления training_libs
 try:
     import imagesize
-    print(f"[FLUX2_TRAIN] ✓ imagesize module found")
+    print(f"[FLUX2_TRAIN] ✓ imagesize found: {imagesize.__file__}")
 except ImportError:
     print("[FLUX2_TRAIN] ⚠ imagesize module NOT found!")
-    print("[FLUX2_TRAIN] This may cause dataset loading to fail")
-    # The training will likely fail, but we don't exit here - let user see the error
+    print("[FLUX2_TRAIN] This will cause dataset loading to fail")
 
-# === Import sd-scripts components ===
+# Парсим sd_scripts_dir
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("--sd_scripts_dir", type=str, default="")
+args, _ = parser.parse_known_args()
+
+if args.sd_scripts_dir and os.path.exists(args.sd_scripts_dir):
+    print(f"[FLUX2_TRAIN] Setting up sd-scripts path: {args.sd_scripts_dir}")
+    # Добавляем sd-scripts в конец (после training_libs)
+    if args.sd_scripts_dir not in sys.path:
+        sys.path.append(args.sd_scripts_dir)
+    library_path = os.path.join(args.sd_scripts_dir, "library")
+    if os.path.exists(library_path) and library_path not in sys.path:
+        sys.path.append(library_path)
+else:
+    print("[FLUX2_TRAIN] WARNING: --sd_scripts_dir not provided")
+
+# Теперь можно импортировать библиотеки
+import logging
+import torch
 try:
-    from library import train_util
-    from library.flux_train_network import FluxNetworkTrainer
-    import library.flux_utils
-    from . import flux2_utils, flux2_models
+    from library import train_util, flux_train_utils
+    import library.flux_train_network as base_trainer
     print("[FLUX2_TRAIN] ✓ All imports successful")
 except ImportError as e:
     print(f"[FLUX2_TRAIN] CRITICAL IMPORT ERROR: {e}")
     print("[FLUX2_TRAIN] Ensure --sd_scripts_dir is correct in the Configurator node")
+    sys.exit(1)
+
+# Импортируем наши модули Flux.2
+try:
+    # Относительный импорт может не работать, используем абсолютный путь
+    flux2_support_dir = os.path.dirname(current_file)
+    if flux2_support_dir not in sys.path:
+        sys.path.insert(0, flux2_support_dir)
+    
+    import flux2_utils
+    import flux2_models
+    print("[FLUX2_TRAIN] ✓ Flux.2 modules loaded")
+except ImportError as e:
+    print(f"[FLUX2_TRAIN] ERROR loading Flux.2 modules: {e}")
     sys.exit(1)
 
 # Setup logging
@@ -93,6 +93,13 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# Import FluxNetworkTrainer base class after all paths are set up
+try:
+    from library.flux_train_network import FluxNetworkTrainer
+except ImportError as e:
+    print(f"[FLUX2_TRAIN] CRITICAL: Cannot import FluxNetworkTrainer: {e}")
+    sys.exit(1)
 
 
 class Flux2NetworkTrainer(FluxNetworkTrainer):
