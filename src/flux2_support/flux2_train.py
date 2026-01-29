@@ -23,19 +23,56 @@ import argparse
 import logging
 import torch
 
-# === PHASE 3: Setup sd-scripts path FIRST, before any imports ===
-# This is crucial - we need to parse --sd_scripts_dir early
+# === PHASE 2+4: Setup training_libs and sd-scripts paths FIRST ===
+# CRITICAL: This must happen BEFORE any other imports
+# Save original paths to preserve access to standard libraries
+original_sys_path = list(sys.path)
+
+# 1. Get the project root and training_libs directory
+current_file_path = os.path.abspath(__file__)
+# Navigate: src/flux2_support/flux2_train.py -> src -> ComfyUI-Flux2-LoRA-Manager
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
+training_libs_path = os.path.join(project_root, "training_libs")
+
+# 2. Pre-load local training_libs (where ComfyUI's package manager installs packages)
+if os.path.exists(training_libs_path):
+    print(f"[FLUX2_TRAIN] Pre-loading training_libs from: {training_libs_path}")
+    sys.path.insert(0, training_libs_path)
+else:
+    print(f"[FLUX2_TRAIN] ⚠ training_libs not found at: {training_libs_path}")
+
+# 3. Parse sd_scripts_dir argument (early, before other imports)
 parser_early = argparse.ArgumentParser(add_help=False)
 parser_early.add_argument("--sd_scripts_dir", type=str, default="")
 args_early, remaining = parser_early.parse_known_args()
 
+# 4. Add sd-scripts to path with proper priority
 if args_early.sd_scripts_dir and os.path.exists(args_early.sd_scripts_dir):
     print(f"[FLUX2_TRAIN] Setting up sd-scripts path: {args_early.sd_scripts_dir}")
-    sys.path.insert(0, args_early.sd_scripts_dir)
-    sys.path.insert(0, os.path.join(args_early.sd_scripts_dir, "library"))
+    library_path = os.path.join(args_early.sd_scripts_dir, "library")
+    
+    # Add paths - append to preserve training_libs priority
+    if args_early.sd_scripts_dir not in sys.path:
+        sys.path.append(args_early.sd_scripts_dir)
+    if library_path not in sys.path:
+        sys.path.append(library_path)
+    
+    # Ensure current script directory is in path
+    current_dir = os.path.dirname(current_file_path)
+    if current_dir not in sys.path:
+        sys.path.insert(1, current_dir)  # After training_libs but before others
 else:
     print("[FLUX2_TRAIN] WARNING: --sd_scripts_dir not provided or invalid")
     print("[FLUX2_TRAIN] Attempting to import from default PYTHONPATH")
+
+# 5. Check for imagesize module (critical dependency)
+try:
+    import imagesize
+    print(f"[FLUX2_TRAIN] ✓ imagesize module found")
+except ImportError:
+    print("[FLUX2_TRAIN] ⚠ imagesize module NOT found!")
+    print("[FLUX2_TRAIN] This may cause dataset loading to fail")
+    # The training will likely fail, but we don't exit here - let user see the error
 
 # === Import sd-scripts components ===
 try:
@@ -99,18 +136,19 @@ class Flux2NetworkTrainer(FluxNetworkTrainer):
 
         # === Load VAE ===
         logger.info("[FLUX2] Loading VAE (AutoEncoder)...")
-        if args.ae:
+        vae_path = getattr(args, "ae", None)  # Safe attribute access
+        if vae_path:
             try:
                 ae = library.flux_utils.load_ae(
-                    args.ae,
+                    vae_path,
                     weight_dtype,
                     "cpu",
                     disable_mmap=getattr(args, "disable_mmap_load_safetensors", False),
                 )
-                logger.info(f"[FLUX2] ✓ VAE loaded from: {args.ae}")
+                logger.info(f"[FLUX2] ✓ VAE loaded from: {vae_path}")
             except Exception as e:
                 logger.error(f"[FLUX2] Error loading VAE: {e}")
-                raise ValueError(f"Failed to load VAE from {args.ae}: {e}")
+                raise ValueError(f"Failed to load VAE from {vae_path}: {e}")
         else:
             logger.error("[FLUX2] ERROR: --ae (VAE path) is REQUIRED for Flux training!")
             raise ValueError("VAE path (--ae) is required for Flux.1/Flux.2 training")

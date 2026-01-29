@@ -233,6 +233,7 @@ class Flux2_8GB_Configurator:
             "--gradient_accumulation_steps", "1",
             "--network_dim", str(lora_rank),  # Ensure string type
             "--network_alpha", str(lora_rank),
+            "--network_module", "networks.lora",  # CRITICAL: Required by kohya/sd-scripts
 
             # --- VRAM SAVING STRATEGY ---
             "--mixed_precision", "bf16",
