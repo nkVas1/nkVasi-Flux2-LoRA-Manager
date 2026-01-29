@@ -77,6 +77,21 @@ class Flux2_8GB_Configurator:
                 "enable_bucket": ("BOOLEAN", {"default": True}),
                 "seed": ("INT", {"default": 42}),
                 "cache_to_disk": ("BOOLEAN", {"default": True}),
+                "vae_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "label": "VAE Path (Optional - for Flux.1/Flux.2)"
+                }),
+                "clip_l_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "label": "CLIP-L Path (Optional - for Flux.1)"
+                }),
+                "t5xxl_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "label": "T5-XXL Path (Optional - for Flux.1)"
+                }),
             }
         }
 
@@ -94,6 +109,9 @@ class Flux2_8GB_Configurator:
         enable_bucket=True,
         seed=42,
         cache_to_disk=True,
+        vae_path="",
+        clip_l_path="",
+        t5xxl_path="",
     ):
         """Generate training configuration and command arguments."""
         
@@ -228,6 +246,35 @@ class Flux2_8GB_Configurator:
             cmd.extend([
                 "--cache_latents_to_disk",
             ])
+        
+        # PHASE 1: Add VAE/CLIP/T5 paths if provided
+        # This fixes Flux.1 training by providing encoder paths
+        if vae_path and os.path.exists(vae_path):
+            cmd.extend(["--ae", vae_path])
+            print(f"[CONFIG-GEN] ✓ VAE path added: {vae_path}")
+        else:
+            if vae_path:
+                print(f"[CONFIG-GEN] ⚠ VAE path not found: {vae_path}")
+        
+        if clip_l_path and os.path.exists(clip_l_path):
+            cmd.extend(["--clip_l", clip_l_path])
+            print(f"[CONFIG-GEN] ✓ CLIP-L path added: {clip_l_path}")
+        else:
+            if clip_l_path:
+                print(f"[CONFIG-GEN] ⚠ CLIP-L path not found: {clip_l_path}")
+        
+        if t5xxl_path and os.path.exists(t5xxl_path):
+            cmd.extend(["--t5xxl", t5xxl_path])
+            print(f"[CONFIG-GEN] ✓ T5-XXL path added: {t5xxl_path}")
+        else:
+            if t5xxl_path:
+                print(f"[CONFIG-GEN] ⚠ T5-XXL path not found: {t5xxl_path}")
+        
+        # PHASE 1 (Flux.2 specific): Pass sd-scripts path to custom trainer
+        # This allows flux2_train.py to locate library module
+        if is_flux2:
+            cmd.extend(["--sd_scripts_dir", sd_scripts_path])
+            print(f"[CONFIG-GEN] ✓ sd-scripts dir passed to Flux.2 trainer: {sd_scripts_path}")
         
         cmd.extend([
             "--optimizer_type", "adafactor",

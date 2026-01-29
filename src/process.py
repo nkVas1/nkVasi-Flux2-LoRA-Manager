@@ -299,8 +299,11 @@ sys.path.insert(0, r"{script_dir_forward}")
 # === Verify setup ===
 library_path = os.path.join(r"{script_dir_forward}", "library")
 if not os.path.exists(library_path):
-    print(f"[WRAPPER] ERROR: library not found at {{library_path}}")
-    sys.exit(1)
+    print(f"[WRAPPER] WARNING: 'library' folder not found at {{library_path}}")
+    print(f"[WRAPPER] Assuming script handles imports via --sd_scripts_dir or PYTHONPATH")
+    print(f"[WRAPPER] This is OK for custom trainers (e.g., Flux.2 LoRA trainer)")
+else:
+    print(f"[WRAPPER] ✓ Found library at: {{library_path}}")
 
 print(f"[WRAPPER] ✓ sd-scripts added: {script_dir_forward}")
 
