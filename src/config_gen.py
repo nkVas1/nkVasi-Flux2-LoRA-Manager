@@ -106,6 +106,21 @@ class Flux2_8GB_Configurator:
                     "multiline": False,
                     "label": "T5-XXL Path (Optional - for Flux.1)"
                 }),
+                "cache_text_encoder_outputs": ("BOOLEAN", {
+                    "default": False,
+                    "label": "Cache Text Encoder outputs (speed up, requires shuffle_caption OFF)"
+                }),
+                "quality_mode": ("BOOLEAN", {
+                    "default": False,
+                    "label": "Quality mode (disable fp8_base, slower, more VRAM)"
+                }),
+                "target_epochs": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 200,
+                    "step": 1,
+                    "label": "Target Epochs (0=manual max_train_steps, >0=auto calculate steps)"
+                }),
             }
         }
 
@@ -128,6 +143,9 @@ class Flux2_8GB_Configurator:
         vae_path="",
         clip_l_path="",
         t5xxl_path="",
+        cache_text_encoder_outputs=False,
+        quality_mode=False,
+        target_epochs=0,
     ):
         """Generate training configuration and command arguments."""
         
@@ -158,6 +176,18 @@ class Flux2_8GB_Configurator:
             return (error_msg, "", "")
         
         print(f"[CONFIG-GEN] ✓ Found {len(image_files)} images in dataset")
+        
+        # === AUTO-CORRECTION: Handle encoder cache incompatibilities ===
+        shuffle_caption_effective = True
+        if cache_text_encoder_outputs:
+            shuffle_caption_effective = False
+            print("[CONFIG-GEN] ✓ Encoder cache ON -> forcing shuffle_caption=False and disabling caption dropout/warmup fields")
+        
+        # === AUTO-CALCULATION: target_epochs to max_train_steps ===
+        steps_per_epoch = len(image_files) * num_repeats
+        if target_epochs and target_epochs > 0:
+            max_train_steps = steps_per_epoch * target_epochs
+            print(f"[CONFIG-GEN] ✓ target_epochs={target_epochs} -> max_train_steps={max_train_steps} (steps_per_epoch={steps_per_epoch})")
         
         # FIX 2: Diagnostic message for num_repeats
         expected_epochs = max_train_steps // (len(image_files) * num_repeats) + 1
@@ -209,7 +239,7 @@ class Flux2_8GB_Configurator:
         # Reference: https://github.com/kohya-ss/sd-scripts/blob/main/docs/config_README-en.md
         dataset_config = {
             "general": {
-                "shuffle_caption": True,
+                "shuffle_caption": shuffle_caption_effective,
                 "keep_tokens": 1,
                 "enable_bucket": enable_bucket,
             },
@@ -228,6 +258,11 @@ class Flux2_8GB_Configurator:
                             "image_dir": img_folder,
                             "num_repeats": num_repeats,
                             "caption_extension": ".txt",
+                            "shuffle_caption": shuffle_caption_effective,
+                            "caption_dropout_rate": 0.0,
+                            "caption_tag_dropout_rate": 0.0,
+                            "token_warmup_min": 1,
+                            "token_warmup_step": 0,
                         }
                     ]
                 }
@@ -385,12 +420,17 @@ class Flux2_8GB_Configurator:
         # === FIX 3: Оптимизация памяти для 3060 Ti (8GB) ===
         # Критические флаги для ускорения на 8ГБ VRAM
         if not is_flux2:  # Flux.1 specific optimizations
-            cmd.extend([
-                "--lowram",  # Снижает потребление при загрузке моделей
-                "--cache_text_encoder_outputs",  # Кэширует выходы T5/CLIP (огромный буст!)
-                "--cache_text_encoder_outputs_to_disk",  # На диск чтобы не забивать RAM
-            ])
-            print("[CONFIG-GEN] ✓ FIX 3: Enabled encoder caching (critical for 8GB speed)")
+            cmd.append("--lowram")
+            
+            # Conditional encoder caching - only if cache_text_encoder_outputs enabled
+            if cache_text_encoder_outputs:
+                cmd.extend([
+                    "--cache_text_encoder_outputs",
+                    "--cache_text_encoder_outputs_to_disk",
+                ])
+                print("[CONFIG-GEN] ✓ FIX 3: Enabled encoder caching (shuffle_caption disabled)")
+            else:
+                print("[CONFIG-GEN] ℹ FIX 3: Encoder caching disabled - shuffle_caption enabled")
         
         cmd.extend([
             "--persistent_data_loader_workers",  # Сохраняет workers между эпохами
@@ -431,8 +471,14 @@ class Flux2_8GB_Configurator:
         cmd.extend([
             "--optimizer_type", "adafactor",
             "--optimizer_args", "scale_parameter=False", "relative_step=False", "warmup_init=False",
-            "--fp8_base",  # Crucial for 8GB: quantizes base model to FP8
         ])
+        
+        # === Quality vs Speed mode ===
+        if not quality_mode:
+            cmd.append("--fp8_base")
+            print("[CONFIG-GEN] ✓ fp8_base enabled (speed mode)")
+        else:
+            print("[CONFIG-GEN] ✓ fp8_base disabled (quality mode)")
 
         # CRITICAL: Return command as JSON, not as string
         # This preserves Windows paths with backslashes
