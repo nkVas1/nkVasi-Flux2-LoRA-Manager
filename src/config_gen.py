@@ -151,6 +151,10 @@ class Flux2_8GB_Configurator:
         
         print(f"[CONFIG-GEN] ✓ Found {len(image_files)} images in dataset")
         
+        # FIX 2: Diagnostic message for num_repeats
+        expected_epochs = max_train_steps // (len(image_files) * num_repeats) + 1
+        print(f"[CONFIG-GEN] FIX 2 DIAGNOSTIC: num_repeats={num_repeats}, expected_epochs={expected_epochs} (steps={max_train_steps} / ({len(image_files)} images * {num_repeats} repeats))")
+        
         # Check 3: sd-scripts path exists (critical for Flux.1)
         if not os.path.isdir(sd_scripts_path):
             error_msg = f"ERROR: sd-scripts path not found: {sd_scripts_path}"
@@ -158,6 +162,31 @@ class Flux2_8GB_Configurator:
             return (error_msg, "", "")
         
         print(f"[CONFIG-GEN] ✓ sd-scripts path found: {sd_scripts_path}")
+        
+        # === UX 5: EXTENDED VALIDATION (Compatibility checks) ===
+        validation_warnings = []
+        
+        # Check VRAM compatibility
+        if int(lora_rank) > 32:
+            validation_warnings.append(f"LoRA rank >{lora_rank} may cause OOM on 8GB VRAM. Consider rank=16 or 32.")
+        
+        # Check steps vs dataset size
+        if expected_epochs > 50:
+            validation_warnings.append(f"Very high epoch count ({expected_epochs}). Consider increasing num_repeats or reducing max_train_steps.")
+        elif expected_epochs < 3:
+            validation_warnings.append(f"Very low epoch count ({expected_epochs}). May underfit. Consider decreasing num_repeats or increasing max_train_steps.")
+        
+        # Check dataset size
+        if len(image_files) < 5:
+            validation_warnings.append(f"Very small dataset ({len(image_files)} images). Consider adding more for better results.")
+        
+        # Report validation warnings
+        if validation_warnings:
+            print("[CONFIG-GEN] " + "="*40)
+            print("[CONFIG-GEN] ⚠ WARNINGS")
+            for warn in validation_warnings:
+                print(f"[CONFIG-GEN]   - {warn}")
+            print("[CONFIG-GEN] " + "="*40)
         
         # Prepare output directory
         output_dir = os.path.join(
@@ -338,22 +367,27 @@ class Flux2_8GB_Configurator:
             cmd.extend(["--sd_scripts_dir", sd_scripts_path])
             print(f"[CONFIG-GEN] ✓ sd-scripts dir passed to Flux.2 trainer: {sd_scripts_path}")
         
-        # === FIX 5: Comprehensive parameter logging ===
+        # === FIX 5 + UX 6: Comprehensive parameter logging and summary ===
         print("\n[CONFIG-GEN] ═══════════════════════════════════════")
         print("[CONFIG-GEN] TRAINING CONFIGURATION SUMMARY")
         print("[CONFIG-GEN] ═══════════════════════════════════════")
         print(f"[CONFIG-GEN] Model Type: {'Flux.2' if is_flux2 else 'Flux.1'}")
         print(f"[CONFIG-GEN] Model: {model_path}")
-        print(f"[CONFIG-GEN] Dataset: {img_folder} ({len(image_files)} images)")
+        print(f"[CONFIG-GEN] Dataset: {img_folder} ({len(image_files)} images, {num_repeats} repeats)")
+        print(f"[CONFIG-GEN] Expected Epochs: {expected_epochs}")
         print(f"[CONFIG-GEN] Output: {output_dir}")
         print(f"[CONFIG-GEN] Resolution: {resolution}x{resolution}")
         print(f"[CONFIG-GEN] LoRA Rank: {lora_rank}")
         print(f"[CONFIG-GEN] Learning Rate: {learning_rate}")
         print(f"[CONFIG-GEN] Max Steps: {max_train_steps}")
+        print(f"[CONFIG-GEN] Batch Size: 1 (for 8GB VRAM)")
         print(f"[CONFIG-GEN] Gradient Accumulation: 1")
         print(f"[CONFIG-GEN] Mixed Precision: bf16")
+        print(f"[CONFIG-GEN] FP8 Quantization: True")
+        print(f"[CONFIG-GEN] Gradient Checkpointing: True")
+        print(f"[CONFIG-GEN] Cache Latents: True")
         print(f"[CONFIG-GEN] Cache to Disk: {cache_to_disk}")
-        print(f"[CONFIG-GEN] Bucket: {enable_bucket}")
+        print(f"[CONFIG-GEN] Bucketing: {enable_bucket}")
         
         if vae_path and os.path.exists(vae_path):
             print(f"[CONFIG-GEN] VAE: {vae_path}")

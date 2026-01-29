@@ -64,6 +64,7 @@ app.registerExtension({
         
         megaPanel.innerHTML = `
             <style>
+                /* === UX 7: Modern UI styling === */
                 @keyframes fadeIn {
                     from { opacity: 0; transform: translate(-50%, -45%); }
                     to { opacity: 1; transform: translate(-50%, -50%); }
@@ -75,6 +76,119 @@ app.registerExtension({
                 @keyframes shimmer {
                     0% { background-position: -1000px 0; }
                     100% { background-position: 1000px 0; }
+                }
+                @keyframes slideDown {
+                    from { transform: translateY(-20px); opacity: 0; }
+                    to { transform: translateY(0); opacity: 1; }
+                }
+                @keyframes glow {
+                    0%, 100% { box-shadow: 0 0 20px rgba(0, 255, 170, 0.3); }
+                    50% { box-shadow: 0 0 30px rgba(0, 255, 170, 0.6); }
+                }
+                
+                /* Progress bar gradient animations */
+                .progress-bar-gradient {
+                    background: linear-gradient(90deg, #4CAF50 0%, #8BC34A 50%, #FFC107 100%);
+                    animation: shimmer 3s infinite;
+                    background-size: 1000px 100%;
+                }
+                
+                /* Circular progress indicator */
+                .progress-circle {
+                    width: 120px;
+                    height: 120px;
+                    border-radius: 50%;
+                    background: conic-gradient(#00ffaa 0deg, #00ffaa 0deg, rgba(0,255,170,0.2) 0deg);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    position: relative;
+                    box-shadow: 0 0 20px rgba(0, 255, 170, 0.5), inset 0 0 10px rgba(0, 255, 170, 0.1);
+                }
+                
+                .progress-percent {
+                    font-size: 32px;
+                    font-weight: bold;
+                    color: #00ffaa;
+                    text-shadow: 0 0 10px rgba(0, 255, 170, 0.8);
+                }
+                
+                /* Info card styling */
+                .info-card {
+                    background: linear-gradient(135deg, rgba(0,255,170,0.1) 0%, rgba(0,255,170,0.05) 100%);
+                    border: 1px solid rgba(0, 255, 170, 0.3);
+                    border-radius: 12px;
+                    padding: 15px;
+                    margin: 10px 0;
+                    backdrop-filter: blur(10px);
+                    transition: all 0.3s ease;
+                }
+                
+                .info-card:hover {
+                    background: linear-gradient(135deg, rgba(0,255,170,0.15) 0%, rgba(0,255,170,0.08) 100%);
+                    border-color: rgba(0, 255, 170, 0.6);
+                    transform: translateX(5px);
+                }
+                
+                .info-row {
+                    display: flex;
+                    justify-content: space-between;
+                    padding: 8px 0;
+                    font-size: 13px;
+                    border-bottom: 1px solid rgba(0, 255, 170, 0.1);
+                }
+                
+                .info-row:last-child {
+                    border-bottom: none;
+                }
+                
+                .info-label {
+                    color: #aaa;
+                    font-weight: 500;
+                }
+                
+                .info-value {
+                    color: #00ffaa;
+                    font-weight: 600;
+                    font-family: 'Monaco', 'Courier New', monospace;
+                }
+                
+                /* Button styling */
+                .action-btn {
+                    background: linear-gradient(135deg, rgba(0,255,170,0.3) 0%, rgba(0,255,170,0.1) 100%);
+                    border: 1.5px solid rgba(0, 255, 170, 0.5);
+                    color: #00ffaa;
+                    padding: 10px 20px;
+                    border-radius: 8px;
+                    cursor: pointer;
+                    font-weight: 600;
+                    font-size: 12px;
+                    transition: all 0.3s ease;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                }
+                
+                .action-btn:hover {
+                    background: linear-gradient(135deg, rgba(0,255,170,0.5) 0%, rgba(0,255,170,0.3) 100%);
+                    border-color: #00ffaa;
+                    box-shadow: 0 0 15px rgba(0, 255, 170, 0.4);
+                    transform: scale(1.05);
+                }
+                
+                .action-btn:active {
+                    transform: scale(0.98);
+                }
+                
+                .action-btn.danger {
+                    border-color: rgba(255, 107, 107, 0.5);
+                    color: #ff6b6b;
+                    background: linear-gradient(135deg, rgba(255,107,107,0.2) 0%, rgba(255,107,107,0.05) 100%);
+                }
+                
+                .action-btn.danger:hover {
+                    background: linear-gradient(135deg, rgba(255,107,107,0.4) 0%, rgba(255,107,107,0.2) 100%);
+                    box-shadow: 0 0 15px rgba(255, 107, 107, 0.4);
+                    border-color: #ff6b6b;
                 }
             </style>
             
@@ -224,6 +338,33 @@ app.registerExtension({
             const line = data.line;
             const lineLower = line.toLowerCase();
             
+            // === UX 4: Parse tqdm format progress bars ===
+            const tqdmMatch = line.match(/steps:\s+(\d+)%\|.*?\|\s*(\d+)\/(\d+)\s*\[(\d+:\d+)<(.*?),/);
+            if (tqdmMatch) {
+                const [_, percent, current, total, elapsed, eta] = tqdmMatch;
+                
+                state.training.currentStep = parseInt(current);
+                state.training.totalSteps = parseInt(total);
+                
+                trainPercent.textContent = percent + "%";
+                trainStep.textContent = `Step ${current} / ${total}`;
+                trainBar.style.width = percent + "%";
+                trainBar.textContent = `${current}/${total}`;
+                trainEta.textContent = eta === '?' ? 'calculating...' : eta;
+                
+                statusFooter.textContent = `Training: ${percent}% | ETA: ${eta === '?' ? 'calculating...' : eta}`;
+                showPanel();
+                trainSection.style.display = "block";
+            }
+            
+            // Parse epoch info from logs
+            const epochMatch = line.match(/epoch\s+(\d+)\/(\d+)/i);
+            if (epochMatch) {
+                const currentEpoch = parseInt(epochMatch[1]);
+                const totalEpochs = parseInt(epochMatch[2]);
+                trainStep.textContent = `Epoch ${currentEpoch} / ${totalEpochs}`;
+            }
+            
             // === PACKAGE INSTALLATION TRACKING ===
             if (lineLower.includes("[pkg]")) {
                 showPanel();
@@ -246,7 +387,7 @@ app.registerExtension({
                         pkgBar.style.width = percent + "%";
                         
                         pkgStatus.textContent = `Downloading and installing ${pkg} package`;
-                        statusFooter.textContent = `⏳ Installing dependencies: ${percent.toFixed(0)}% complete`;
+                        statusFooter.textContent = `Installing dependencies: ${percent.toFixed(0)}% complete`;
                     }
                     else if (status === "success") {
                         pkgStatus.textContent = `✓ ${pkg} installed successfully`;
@@ -321,11 +462,20 @@ app.registerExtension({
             }
             
             // Training completion
-            if (lineLower.includes("training process completed") || lineLower.includes("training finished")) {
-                trainBar.style.width = "100%";
-                trainPercent.textContent = "100%";
-                statusFooter.textContent = "🎉 Training completed successfully!";
-                statusFooter.style.background = "rgba(107, 207, 127, 0.3)";
+            if (lineLower.includes("training completed successfully") || 
+                lineLower.includes("training finished") ||
+                data.type === "flux_train_complete") {
+                
+                // FIX 3: Handle exit code
+                if (data.exit_code === 0 || lineLower.includes("successfully")) {
+                    trainBar.style.width = "100%";
+                    trainPercent.textContent = "100%";
+                    statusFooter.textContent = "✅ Training completed successfully!";
+                    statusFooter.style.background = "rgba(107, 207, 127, 0.3)";
+                } else {
+                    statusFooter.textContent = `❌ Training failed (exit code: ${data.exit_code || '?'})`;
+                    statusFooter.style.background = "rgba(255, 107, 107, 0.3)";
+                }
                 
                 // Auto-hide after 8 seconds
                 setTimeout(() => {
@@ -334,6 +484,18 @@ app.registerExtension({
                     state.training = { totalSteps: 0, currentStep: 0, startTime: null, lastLoss: null };
                     state.packages = { total: 9, current: 0, currentName: "", startTime: null };
                 }, 8000);
+            }
+            
+            // Training error/failure
+            if (lineLower.includes("training failed") ||
+                data.type === "flux_train_error" ||
+                lineLower.includes("critical error") ||
+                lineLower.includes("exception")) {
+                
+                statusFooter.textContent = `❌ Training error: ${line.substring(0, 100)}`;
+                statusFooter.style.background = "rgba(255, 107, 107, 0.3)";
+                trainBar.style.background = "#ff6b6b";
+                showPanel();
             }
         });
         

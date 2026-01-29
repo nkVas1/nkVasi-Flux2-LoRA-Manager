@@ -283,8 +283,14 @@ class TrainingProcessManager:
             wrapper_content = f'''import sys
 import os
 
+# === CRITICAL FIX 1: Force UTF-8 encoding for Windows console ===
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # === CRITICAL: Block problematic modules BEFORE any imports ===
-print("[WRAPPER] ⚡ Installing import blockers...")
+print("[WRAPPER] >>> Installing import blockers...")
 
 # Add plugin src to path FIRST
 plugin_src = r"{plugin_src_forward}"
@@ -297,25 +303,25 @@ install_import_blockers()
 
 # Verify blockers work
 if verify_blockers_active():
-    print("[WRAPPER] ✓ Import protection verified")
+    print("[WRAPPER] OK Import protection verified")
 else:
-    print("[WRAPPER] ⚠ Blockers installed but verification failed")
+    print("[WRAPPER] WARN Blockers installed but verification failed")
 
 # === Setup paths ===
 training_libs = os.path.normpath(r"{plugin_dir_forward}/training_libs")
 
 if os.path.exists(training_libs):
     sys.path.insert(0, training_libs)
-    print(f"[WRAPPER] ✓ Training libs prioritized: {{training_libs}}")
+    print(f"[WRAPPER] OK Training libs prioritized: {{training_libs}}")
 
 sys.path.insert(0, r"{script_dir_forward}")
 
 # === FIX 3: Use sd_scripts_dir for proper diagnostics ===
 sd_scripts_dir = r"{sd_scripts_dir_forward}"
 if sd_scripts_dir:
-    print(f"[WRAPPER] ✓ sd-scripts detected: {{sd_scripts_dir}}")
+    print(f"[WRAPPER] OK sd-scripts detected: {{sd_scripts_dir}}")
 else:
-    print(f"[WRAPPER] ℹ sd-scripts dir not provided, using script dir: {script_dir_forward}")
+    print(f"[WRAPPER] INFO sd-scripts dir not provided, using script dir: {script_dir_forward}")
     sd_scripts_dir = r"{script_dir_forward}"
 
 # === Verify setup ===
@@ -325,16 +331,16 @@ if not os.path.exists(library_path):
     print(f"[WRAPPER] Assuming script handles imports via --sd_scripts_dir or PYTHONPATH")
     print(f"[WRAPPER] This is OK for custom trainers (e.g., Flux.2 LoRA trainer)")
 else:
-    print(f"[WRAPPER] ✓ Found library at: {{library_path}}")
+    print(f"[WRAPPER] OK Found library at: {{library_path}}")
 
-print(f"[WRAPPER] ✓ sd-scripts path: {{sd_scripts_dir}}")
+print(f"[WRAPPER] OK sd-scripts path: {{sd_scripts_dir}}")
 
 # === Test transformers import ===
 try:
     import transformers
-    print(f"[WRAPPER] ✓ transformers {{transformers.__version__}} loaded")
+    print(f"[WRAPPER] OK transformers {{transformers.__version__}} loaded")
 except Exception as e:
-    print(f"[WRAPPER] ⚠ transformers import failed: {{e}}")
+    print(f"[WRAPPER] WARN transformers import failed: {{e}}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
@@ -348,22 +354,22 @@ try:
     
     if os.path.basename(r"{original_script_forward}") == "flux_train_network.py":
         patch_lora_flags()
-        print("[WRAPPER] ✓ FIX 4: LoRA compatibility patched via compat_sd_scripts")
+        print("[WRAPPER] OK FIX 4: LoRA compatibility patched via compat_sd_scripts")
 except ImportError:
     # Fallback: inline patch (legacy support)
-    print("[WRAPPER] ℹ FIX 4: compat_sd_scripts not available, using inline patch")
+    print("[WRAPPER] INFO FIX 4: compat_sd_scripts not available, using inline patch")
     try:
         import importlib
         lora_mod = importlib.import_module("networks.lora")
         if hasattr(lora_mod, "LoRANetwork"):
             if not hasattr(lora_mod.LoRANetwork, "train_t5xxl"):
                 lora_mod.LoRANetwork.train_t5xxl = False
-                print("[WRAPPER] ✓ Patched LoRANetwork.train_t5xxl=False")
+                print("[WRAPPER] OK Patched LoRANetwork.train_t5xxl=False")
             if not hasattr(lora_mod.LoRANetwork, "train_clip_l"):
                 lora_mod.LoRANetwork.train_clip_l = False
-                print("[WRAPPER] ✓ Patched LoRANetwork.train_clip_l=False")
+                print("[WRAPPER] OK Patched LoRANetwork.train_clip_l=False")
     except Exception as e:
-        print(f"[WRAPPER] ⚠ LoRA compatibility patch failed: {{e}}")
+        print(f"[WRAPPER] WARN LoRA compatibility patch failed: {{e}}")
 
 # === Execute training script ===
 try:
@@ -543,7 +549,12 @@ except Exception as e:
                 except Exception:
                     pass
         finally:
-            # Clean up wrapper script if it was created
+            # === FIX 3: Determine exit status ===
+            exit_code = None
+            if self.process:
+                exit_code = self.process.poll()
+            
+            # === Cleanup wrapper ===
             if hasattr(self, '_wrapper_script') and self._wrapper_script:
                 try:
                     if os.path.exists(self._wrapper_script):
@@ -552,12 +563,25 @@ except Exception as e:
                 except Exception as e:
                     print(f"[DEBUG] Failed to clean wrapper: {e}")
 
-            # Send completion message
-            completion_msg = "--- TRAINING PROCESS COMPLETED ---"
-            print(f"[FLUX-TRAIN] {completion_msg}")
+            # === Send final status ===
+            if exit_code is None:
+                status_msg = "--- TRAINING PROCESS: STATUS UNKNOWN ---"
+            elif exit_code == 0:
+                status_msg = "=== TRAINING COMPLETED SUCCESSFULLY ==="
+            else:
+                status_msg = f"!!! TRAINING FAILED (exit code: {exit_code}) !!!"
+            
+            print(f"[FLUX-TRAIN] {status_msg}")
+            
             if PromptServer:
                 try:
-                    PromptServer.instance.send_sync("flux_train_log", {"line": completion_msg})
+                    # Send with special event type for UI to highlight
+                    event_type = "flux_train_complete" if exit_code == 0 else "flux_train_error"
+                    PromptServer.instance.send_sync("flux_train_log", {
+                        "line": status_msg,
+                        "type": event_type,
+                        "exit_code": exit_code
+                    })
                 except Exception:
                     pass
 
