@@ -234,6 +234,20 @@ class TrainingProcessManager:
         cwd_abs = os.path.abspath(cwd)
         current_pythonpath = env.get("PYTHONPATH", "")
         
+        # FIX 3: Extract --sd_scripts_dir from cmd_list for wrapper diagnostics
+        sd_scripts_dir = ""
+        for i, arg in enumerate(cmd_list):
+            if arg == "--sd_scripts_dir" and i + 1 < len(cmd_list):
+                sd_scripts_dir = cmd_list[i + 1]
+                break
+        
+        if sd_scripts_dir:
+            print(f"[PROCESS] FIX 3: Extracted sd_scripts_dir: {sd_scripts_dir}")
+            sd_scripts_dir_forward = sd_scripts_dir.replace('\\', '/')
+        else:
+            print(f"[PROCESS] No --sd_scripts_dir found in command line")
+            sd_scripts_dir_forward = ""
+        
         # Build PYTHONPATH with absolute paths only
         pythonpath_parts = [script_dir_abs]
         
@@ -296,8 +310,16 @@ if os.path.exists(training_libs):
 
 sys.path.insert(0, r"{script_dir_forward}")
 
+# === FIX 3: Use sd_scripts_dir for proper diagnostics ===
+sd_scripts_dir = r"{sd_scripts_dir_forward}"
+if sd_scripts_dir:
+    print(f"[WRAPPER] ✓ sd-scripts detected: {{sd_scripts_dir}}")
+else:
+    print(f"[WRAPPER] ℹ sd-scripts dir not provided, using script dir: {script_dir_forward}")
+    sd_scripts_dir = r"{script_dir_forward}"
+
 # === Verify setup ===
-library_path = os.path.join(r"{script_dir_forward}", "library")
+library_path = os.path.join(sd_scripts_dir, "library")
 if not os.path.exists(library_path):
     print(f"[WRAPPER] WARNING: 'library' folder not found at {{library_path}}")
     print(f"[WRAPPER] Assuming script handles imports via --sd_scripts_dir or PYTHONPATH")
@@ -305,7 +327,7 @@ if not os.path.exists(library_path):
 else:
     print(f"[WRAPPER] ✓ Found library at: {{library_path}}")
 
-print(f"[WRAPPER] ✓ sd-scripts added: {script_dir_forward}")
+print(f"[WRAPPER] ✓ sd-scripts path: {{sd_scripts_dir}}")
 
 # === Test transformers import ===
 try:
@@ -318,21 +340,30 @@ except Exception as e:
     sys.exit(1)
 
 # === Compatibility patch for Flux trainer ===
-# flux_train_network.py expects LoRANetwork.train_t5xxl to exist
+# FIX 4: Use dedicated compat_sd_scripts module instead of inlined patch
 try:
+    # First try to use our dedicated compatibility module (Flux.2 LoRA Manager)
+    sys.path.insert(0, r"{plugin_src_forward}")
+    from flux2_support.compat_sd_scripts import patch_lora_flags
+    
     if os.path.basename(r"{original_script_forward}") == "flux_train_network.py":
+        patch_lora_flags()
+        print("[WRAPPER] ✓ FIX 4: LoRA compatibility patched via compat_sd_scripts")
+except ImportError:
+    # Fallback: inline patch (legacy support)
+    print("[WRAPPER] ℹ FIX 4: compat_sd_scripts not available, using inline patch")
+    try:
         import importlib
         lora_mod = importlib.import_module("networks.lora")
         if hasattr(lora_mod, "LoRANetwork"):
             if not hasattr(lora_mod.LoRANetwork, "train_t5xxl"):
                 lora_mod.LoRANetwork.train_t5xxl = False
                 print("[WRAPPER] ✓ Patched LoRANetwork.train_t5xxl=False")
-            # на всякий случай (в разных ветках sd-scripts могут быть разные флаги)
             if not hasattr(lora_mod.LoRANetwork, "train_clip_l"):
                 lora_mod.LoRANetwork.train_clip_l = False
                 print("[WRAPPER] ✓ Patched LoRANetwork.train_clip_l=False")
-except Exception as e:
-    print(f"[WRAPPER] ⚠ Flux compatibility patch failed: {{e}}")
+    except Exception as e:
+        print(f"[WRAPPER] ⚠ LoRA compatibility patch failed: {{e}}")
 
 # === Execute training script ===
 try:

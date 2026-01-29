@@ -20,15 +20,70 @@ Usage:
 import sys
 import os
 import argparse
+import importlib.util
 
-# === ФАЗА 5: Устойчивый поиск training_libs ===
-# Проблема: при запуске через accelerate wrapper, __file__ может указывать на временную папку
-# Решение: используем многоуровневый поиск
+# === FIX 2: Fallback-импорт модулей sd-scripts ===
+def _load_sd_scripts_modules(sd_scripts_dir: str):
+    """
+    Fallback-импорт модулей sd-scripts напрямую с диска.
+    
+    Используется, когда стандартный импорт от library.flux_train_network не работает
+    из-за проблем с accelerate wrapper или конфликтов пути.
+    
+    Args:
+        sd_scripts_dir: Path to sd-scripts root directory
+        
+    Returns:
+        Tuple of (train_util, flux_train_utils, FluxNetworkTrainer)
+    """
+    print("[FLUX2] Attempting FIX 2: Direct sd-scripts module loading via importlib...")
+    
+    lib_dir = os.path.join(sd_scripts_dir, "library")
+    if not os.path.exists(lib_dir):
+        print(f"[FLUX2] ERROR: library dir not found at: {lib_dir}")
+        return None, None, None
+    
+    # Add lib_dir to path
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    
+    try:
+        # Try standard imports first with the new path
+        import train_util
+        import flux_train_utils
+    except ImportError:
+        # Load directly from file
+        print("[FLUX2] Standard import failed, using direct file loading...")
+        
+        train_util_path = os.path.join(lib_dir, "train_util.py")
+        spec = importlib.util.spec_from_file_location("train_util", train_util_path)
+        train_util = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(train_util)
+        
+        flux_train_utils_path = os.path.join(lib_dir, "flux_train_utils.py")
+        spec = importlib.util.spec_from_file_location("flux_train_utils", flux_train_utils_path)
+        flux_train_utils = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(flux_train_utils)
+    
+    # Load flux_train_network.py for FluxNetworkTrainer
+    flux_train_path = os.path.join(sd_scripts_dir, "flux_train_network.py")
+    if not os.path.exists(flux_train_path):
+        print(f"[FLUX2] ERROR: flux_train_network.py not found at: {flux_train_path}")
+        return train_util, flux_train_utils, None
+    
+    spec = importlib.util.spec_from_file_location("flux_train_network_module", flux_train_path)
+    flux_train_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(flux_train_module)
+    
+    # Extract FluxNetworkTrainer class
+    FluxNetworkTrainer = getattr(flux_train_module, "FluxNetworkTrainer", None)
+    if FluxNetworkTrainer is None:
+        print("[FLUX2] ERROR: FluxNetworkTrainer class not found in flux_train_network.py")
+        return train_util, flux_train_utils, None
+    
+    print("[FLUX2] ✓ FIX 2: Successfully loaded sd-scripts modules via importlib")
+    return train_util, flux_train_utils, FluxNetworkTrainer
 
-# 1. Сначала парсим аргументы, чтобы узнать где лежат sd-scripts
-parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument("--sd_scripts_dir", type=str, default="")
-args, _ = parser.parse_known_args()
 
 print(f"[FLUX2] Current sys.path[0]: {sys.path[0]}")
 print(f"[FLUX2] Current working directory: {os.getcwd()}")
@@ -120,13 +175,35 @@ except ImportError as e:
 # === Остальные импорты ===
 import logging
 import torch
+
+# === FIX 2: Try standard import first, use fallback if fails ===
+train_util = None
+flux_train_utils = None
+FluxNetworkTrainer = None
+
+# Попытка 1: Стандартный импорт
 try:
     from library import train_util, flux_train_utils
-    import library.flux_train_network as base_trainer
-    print("[FLUX2_TRAIN] ✓ All sd-scripts imports successful")
+    from library.flux_train_network import FluxNetworkTrainer
+    print("[FLUX2_TRAIN] ✓ All sd-scripts imports successful (standard import)")
 except ImportError as e:
-    print(f"[FLUX2_TRAIN] CRITICAL IMPORT ERROR: {e}")
-    print("[FLUX2_TRAIN] Ensure --sd_scripts_dir is correct in the Configurator node")
+    print(f"[FLUX2_TRAIN] ⚠ Standard import failed: {e}")
+    print("[FLUX2_TRAIN] Attempting FIX 2: Fallback loader...")
+    
+    if args.sd_scripts_dir and os.path.exists(args.sd_scripts_dir):
+        train_util, flux_train_utils, FluxNetworkTrainer = _load_sd_scripts_modules(args.sd_scripts_dir)
+        
+        if FluxNetworkTrainer is None:
+            print("[FLUX2_TRAIN] CRITICAL IMPORT ERROR: FluxNetworkTrainer not available")
+            print("[FLUX2_TRAIN] Ensure --sd_scripts_dir points to valid sd-scripts installation")
+            sys.exit(1)
+    else:
+        print(f"[FLUX2_TRAIN] CRITICAL ERROR: Cannot use fallback without --sd_scripts_dir")
+        print(f"[FLUX2_TRAIN] Received: {args.sd_scripts_dir}")
+        sys.exit(1)
+
+if train_util is None or flux_train_utils is None:
+    print("[FLUX2_TRAIN] CRITICAL ERROR: train_util or flux_train_utils not available")
     sys.exit(1)
 
 # Импортируем наши модули Flux.2

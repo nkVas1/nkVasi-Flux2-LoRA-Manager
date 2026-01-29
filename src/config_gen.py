@@ -6,6 +6,9 @@ Optimized for RTX 3060 Ti (8GB VRAM) and similar hardware
 
 import os
 import json
+import glob
+import sys
+import subprocess
 
 try:
     import folder_paths
@@ -77,6 +80,10 @@ class Flux2_8GB_Configurator:
                 "enable_bucket": ("BOOLEAN", {"default": True}),
                 "seed": ("INT", {"default": 42}),
                 "cache_to_disk": ("BOOLEAN", {"default": True}),
+                "train_unet_only": ("BOOLEAN", {
+                    "default": True,
+                    "label": "Train U-Net only (Flux.2) / Text Encoders (Flux.1)"
+                }),
                 "vae_path": ("STRING", {
                     "default": "",
                     "multiline": False,
@@ -109,11 +116,48 @@ class Flux2_8GB_Configurator:
         enable_bucket=True,
         seed=42,
         cache_to_disk=True,
+        train_unet_only=True,
         vae_path="",
         clip_l_path="",
         t5xxl_path="",
     ):
         """Generate training configuration and command arguments."""
+        
+        # VALIDATION PHASE: Check dataset and paths BEFORE generating config
+        print("\n[CONFIG-GEN] ═══════════════════════════════════════")
+        print("[CONFIG-GEN] VALIDATION PHASE")
+        print("[CONFIG-GEN] ═══════════════════════════════════════")
+        
+        # Check 1: Dataset folder exists
+        if not os.path.isdir(img_folder):
+            error_msg = f"ERROR: Image folder not found: {img_folder}"
+            print(f"[CONFIG-GEN] ✗ {error_msg}")
+            return (error_msg, "", "")
+        
+        print(f"[CONFIG-GEN] ✓ Dataset folder found: {img_folder}")
+        
+        # Check 2: Dataset folder has images
+        import glob
+        image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.webp']
+        image_files = []
+        for ext in image_extensions:
+            image_files.extend(glob.glob(os.path.join(img_folder, ext)))
+            image_files.extend(glob.glob(os.path.join(img_folder, ext.upper())))
+        
+        if not image_files:
+            error_msg = f"ERROR: No images found in {img_folder}"
+            print(f"[CONFIG-GEN] ✗ {error_msg}")
+            return (error_msg, "", "")
+        
+        print(f"[CONFIG-GEN] ✓ Found {len(image_files)} images in dataset")
+        
+        # Check 3: sd-scripts path exists (critical for Flux.1)
+        if not os.path.isdir(sd_scripts_path):
+            error_msg = f"ERROR: sd-scripts path not found: {sd_scripts_path}"
+            print(f"[CONFIG-GEN] ✗ {error_msg}")
+            return (error_msg, "", "")
+        
+        print(f"[CONFIG-GEN] ✓ sd-scripts path found: {sd_scripts_path}")
         
         # Prepare output directory
         output_dir = os.path.join(
@@ -163,7 +207,6 @@ class Flux2_8GB_Configurator:
             else:
                 # CRITICAL: Install toml if missing
                 print("[CONFIG-GEN] ⚠ toml library not found, installing...")
-                import subprocess
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "toml", "--quiet"])
                 import toml as toml_installed
                 with open(toml_path, "w", encoding='utf-8') as f:
@@ -185,7 +228,6 @@ class Flux2_8GB_Configurator:
         if is_flux2:
             # Use Flux.2 dedicated trainer from our codebase
             # This script is located relative to this file
-            import sys
             current_dir = os.path.dirname(os.path.abspath(__file__))
             script_path = os.path.join(current_dir, "flux2_support", "flux2_train.py")
             if not os.path.exists(script_path):
@@ -201,7 +243,6 @@ class Flux2_8GB_Configurator:
             print(f"[CONFIG-GEN] ✓ Using Flux.1 trainer: {script_path}")
 
         # 4. Validate Python interpreter exists (critical for Windows subprocess)
-        import sys
         python_exe = sys.executable
         
         if not os.path.exists(python_exe):
@@ -234,14 +275,33 @@ class Flux2_8GB_Configurator:
             "--network_dim", str(lora_rank),  # Ensure string type
             "--network_alpha", str(lora_rank),
             "--network_module", "networks.lora",  # CRITICAL: Required by kohya/sd-scripts
-            "--network_train_unet_only",  # Train only DiT/UNet, not Text Encoders (standard for Flux)
+        ]
+        
+        # FIX 1: Conditional --network_train_unet_only flag
+        # - For Flux.2: Only train U-Net (DiT), not text encoders (no CLIP encoders in Flux.2)
+        # - For Flux.1: Train text encoders only if train_unet_only=False (U-Net doesn't support LoRA in current version)
+        if is_flux2:
+            if train_unet_only:
+                cmd.append("--network_train_unet_only")
+                print("[CONFIG-GEN] ✓ Flux.2 using --network_train_unet_only (DiT/U-Net only)")
+            else:
+                print("[CONFIG-GEN] ⚠ Flux.2 with train_unet_only=False - will train all modules")
+        else:
+            # Flux.1: Different logic
+            if train_unet_only:
+                print("[CONFIG-GEN] ⚠ Flux.1 with train_unet_only=True - but Flux.1 U-Net lacks LoRA support")
+                print("[CONFIG-GEN]    Will train text encoders instead (if CLIP-L/T5-XXL provided)")
+            else:
+                cmd.append("--network_train_unet_only")
+                print("[CONFIG-GEN] ✓ Flux.1 training text encoders (--network_train_unet_only=False)")
 
-            # --- VRAM SAVING STRATEGY ---
+        # --- VRAM SAVING STRATEGY ---
+        cmd.extend([
             "--mixed_precision", "bf16",
             "--save_precision", "bf16",
             "--gradient_checkpointing",
             "--cache_latents",
-        ]
+        ])
         
         # Add conditional cache_latents_to_disk only if enabled (cleaner than empty strings)
         if cache_to_disk:
@@ -277,6 +337,33 @@ class Flux2_8GB_Configurator:
         if is_flux2:
             cmd.extend(["--sd_scripts_dir", sd_scripts_path])
             print(f"[CONFIG-GEN] ✓ sd-scripts dir passed to Flux.2 trainer: {sd_scripts_path}")
+        
+        # === FIX 5: Comprehensive parameter logging ===
+        print("\n[CONFIG-GEN] ═══════════════════════════════════════")
+        print("[CONFIG-GEN] TRAINING CONFIGURATION SUMMARY")
+        print("[CONFIG-GEN] ═══════════════════════════════════════")
+        print(f"[CONFIG-GEN] Model Type: {'Flux.2' if is_flux2 else 'Flux.1'}")
+        print(f"[CONFIG-GEN] Model: {model_path}")
+        print(f"[CONFIG-GEN] Dataset: {img_folder} ({len(image_files)} images)")
+        print(f"[CONFIG-GEN] Output: {output_dir}")
+        print(f"[CONFIG-GEN] Resolution: {resolution}x{resolution}")
+        print(f"[CONFIG-GEN] LoRA Rank: {lora_rank}")
+        print(f"[CONFIG-GEN] Learning Rate: {learning_rate}")
+        print(f"[CONFIG-GEN] Max Steps: {max_train_steps}")
+        print(f"[CONFIG-GEN] Gradient Accumulation: 1")
+        print(f"[CONFIG-GEN] Mixed Precision: bf16")
+        print(f"[CONFIG-GEN] Cache to Disk: {cache_to_disk}")
+        print(f"[CONFIG-GEN] Bucket: {enable_bucket}")
+        
+        if vae_path and os.path.exists(vae_path):
+            print(f"[CONFIG-GEN] VAE: {vae_path}")
+        if clip_l_path and os.path.exists(clip_l_path):
+            print(f"[CONFIG-GEN] CLIP-L: {clip_l_path}")
+        if t5xxl_path and os.path.exists(t5xxl_path):
+            print(f"[CONFIG-GEN] T5-XXL: {t5xxl_path}")
+        
+        print(f"[CONFIG-GEN] Train U-Net Only: {train_unet_only}")
+        print("[CONFIG-GEN] ═══════════════════════════════════════\n")
         
         cmd.extend([
             "--optimizer_type", "adafactor",
