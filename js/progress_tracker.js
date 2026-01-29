@@ -263,10 +263,14 @@ app.registerExtension({
                     </div>
                     
                     <!-- Stats Row -->
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; font-size: 12px;">
                         <div style="background: rgba(255, 255, 255, 0.05); padding: 8px; border-radius: 6px;">
                             <div style="color: #888; margin-bottom: 3px;">Loss</div>
                             <div style="color: #00ffaa; font-weight: 600; font-size: 14px;" id="train-loss">-</div>
+                        </div>
+                        <div style="background: rgba(255, 255, 255, 0.05); padding: 8px; border-radius: 6px;">
+                            <div style="color: #888; margin-bottom: 3px;">Elapsed</div>
+                            <div style="color: #00ffaa; font-weight: 600; font-size: 14px;" id="flux-elapsed-time">0:00:00</div>
                         </div>
                         <div style="background: rgba(255, 255, 255, 0.05); padding: 8px; border-radius: 6px;">
                             <div style="color: #888; margin-bottom: 3px;">ETA</div>
@@ -316,15 +320,13 @@ app.registerExtension({
             megaPanel.style.display = "none";
         }
         
+        // === FIX 2: Функция для форматирования времени ===
         function formatTime(seconds) {
-            if (!seconds || seconds < 0) return "Unknown";
+            if (!seconds || seconds < 0) return "0:00:00";
             const h = Math.floor(seconds / 3600);
             const m = Math.floor((seconds % 3600) / 60);
             const s = Math.floor(seconds % 60);
-            
-            if (h > 0) return `${h}h ${m}m`;
-            if (m > 0) return `${m}m ${s}s`;
-            return `${s}s`;
+            return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
         }
         
         // ======================================================================
@@ -341,6 +343,11 @@ app.registerExtension({
             // === UX 4: Parse tqdm format progress bars ===
             const tqdmMatch = line.match(/steps:\s+(\d+)%\|.*?\|\s*(\d+)\/(\d+)\s*\[(\d+:\d+)<(.*?),/);
             if (tqdmMatch) {
+                // Initialize startTime on first progress
+                if (!state.training.startTime) {
+                    state.training.startTime = Date.now();
+                }
+                
                 const [_, percent, current, total, elapsed, eta] = tqdmMatch;
                 
                 state.training.currentStep = parseInt(current);
@@ -352,7 +359,13 @@ app.registerExtension({
                 trainBar.textContent = `${current}/${total}`;
                 trainEta.textContent = eta === '?' ? 'calculating...' : eta;
                 
-                statusFooter.textContent = `Training: ${percent}% | ETA: ${eta === '?' ? 'calculating...' : eta}`;
+                // === FIX 2: Update Elapsed Time ===
+                const elapsedMs = Date.now() - state.training.startTime;
+                const elapsedStr = formatTime(elapsedMs / 1000);
+                const elapsedElem = document.getElementById('flux-elapsed-time');
+                if (elapsedElem) elapsedElem.textContent = elapsedStr;
+                
+                statusFooter.textContent = `Training: ${percent}% | Elapsed: ${elapsedStr} | ETA: ${eta === '?' ? 'calculating...' : eta}`;
                 showPanel();
                 trainSection.style.display = "block";
             }

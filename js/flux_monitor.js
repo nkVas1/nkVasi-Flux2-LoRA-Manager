@@ -160,6 +160,37 @@ app.registerExtension({
             console.log("[FLUX-TRAIN]", data.line);
         });
         
+        // === FIX 4: Error handler ===
+        api.addEventListener("flux_train_error", (event) => {
+            const data = event.detail;
+            
+            if (!data || !data.error) {
+                console.warn("[FLUX Monitor] Received empty error event");
+                return;
+            }
+
+            // Show panel on error
+            if (logPanel.style.display === "none") {
+                logPanel.style.display = "block";
+            }
+
+            // Create error line
+            const errorLine = document.createElement("div");
+            errorLine.textContent = `❌ ERROR: ${data.error}`;
+            errorLine.style.color = "#ff6b6b";
+            errorLine.style.fontWeight = "bold";
+            errorLine.style.backgroundColor = "rgba(255, 107, 107, 0.1)";
+            errorLine.style.padding = "8px";
+            errorLine.style.borderRadius = "4px";
+            errorLine.style.marginBottom = "5px";
+            errorLine.style.borderLeft = "3px solid #ff6b6b";
+            
+            contentDiv.appendChild(errorLine);
+            contentDiv.scrollTop = contentDiv.scrollHeight;
+            
+            console.error("[FLUX-TRAIN-ERROR]", data.error);
+        });
+        
         console.log("%c[FLUX Monitor] Ready and Listening!", "color: lime; font-weight: bold; font-size: 12px;");
     }
 });

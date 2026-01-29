@@ -80,6 +80,13 @@ class Flux2_8GB_Configurator:
                 "enable_bucket": ("BOOLEAN", {"default": True}),
                 "seed": ("INT", {"default": 42}),
                 "cache_to_disk": ("BOOLEAN", {"default": True}),
+                "save_every_n_epochs": ("INT", {
+                    "default": 1,
+                    "min": 1,
+                    "max": 100,
+                    "step": 1,
+                    "label": "Save checkpoint every N epochs"
+                }),
                 "train_unet_only": ("BOOLEAN", {
                     "default": True,
                     "label": "Train U-Net only (Flux.2) / Text Encoders (Flux.1)"
@@ -116,6 +123,7 @@ class Flux2_8GB_Configurator:
         enable_bucket=True,
         seed=42,
         cache_to_disk=True,
+        save_every_n_epochs=1,
         train_unet_only=True,
         vae_path="",
         clip_l_path="",
@@ -366,6 +374,27 @@ class Flux2_8GB_Configurator:
         if is_flux2:
             cmd.extend(["--sd_scripts_dir", sd_scripts_path])
             print(f"[CONFIG-GEN] ✓ sd-scripts dir passed to Flux.2 trainer: {sd_scripts_path}")
+        
+        # === FIX 1: Автосохранение чекпоинтов ===
+        cmd.extend([
+            "--save_every_n_epochs", str(save_every_n_epochs),
+            "--save_model_as", "safetensors",
+        ])
+        print(f"[CONFIG-GEN] ✓ Checkpoints: saving every {save_every_n_epochs} epochs as safetensors")
+        
+        # === FIX 3: Оптимизация памяти для 3060 Ti (8GB) ===
+        # Критические флаги для ускорения на 8ГБ VRAM
+        if not is_flux2:  # Flux.1 specific optimizations
+            cmd.extend([
+                "--lowram",  # Снижает потребление при загрузке моделей
+                "--cache_text_encoder_outputs",  # Кэширует выходы T5/CLIP (огромный буст!)
+                "--cache_text_encoder_outputs_to_disk",  # На диск чтобы не забивать RAM
+            ])
+            print("[CONFIG-GEN] ✓ FIX 3: Enabled encoder caching (critical for 8GB speed)")
+        
+        cmd.extend([
+            "--persistent_data_loader_workers",  # Сохраняет workers между эпохами
+        ])
         
         # === FIX 5 + UX 6: Comprehensive parameter logging and summary ===
         print("\n[CONFIG-GEN] ═══════════════════════════════════════")
