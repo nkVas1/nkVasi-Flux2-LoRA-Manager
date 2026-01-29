@@ -346,12 +346,20 @@ class Flux2_8GB_Configurator:
             "--gradient_accumulation_steps", "1",
             "--network_dim", str(lora_rank),  # Ensure string type
             "--network_alpha", str(lora_rank),
-            "--network_module", "networks.lora",  # CRITICAL: Required by kohya/sd-scripts
         ]
+        
+        # === FIX: Select correct network module for Flux.1 vs Flux.2 ===
+        if is_flux2:
+            cmd.extend(["--network_module", "networks.lora"])
+            print("[CONFIG-GEN] ✓ Network module: networks.lora (Flux.2)")
+        else:
+            # Flux.1 dev requires lora_flux to find U-Net modules correctly
+            cmd.extend(["--network_module", "networks.lora_flux"])
+            print("[CONFIG-GEN] ✓ Network module: networks.lora_flux (Flux.1)")
         
         # FIX 1: Conditional --network_train_unet_only flag
         # - For Flux.2: Only train U-Net (DiT), not text encoders (no CLIP encoders in Flux.2)
-        # - For Flux.1: Train text encoders only if train_unet_only=False (U-Net doesn't support LoRA in current version)
+        # - For Flux.1: U-Net IS trainable with networks.lora_flux
         if is_flux2:
             if train_unet_only:
                 cmd.append("--network_train_unet_only")
@@ -359,13 +367,12 @@ class Flux2_8GB_Configurator:
             else:
                 print("[CONFIG-GEN] ⚠ Flux.2 with train_unet_only=False - will train all modules")
         else:
-            # Flux.1: Different logic
+            # Flux.1: Logic fixed for networks.lora_flux
             if train_unet_only:
-                print("[CONFIG-GEN] ⚠ Flux.1 with train_unet_only=True - but Flux.1 U-Net lacks LoRA support")
-                print("[CONFIG-GEN]    Will train text encoders instead (if CLIP-L/T5-XXL provided)")
-            else:
                 cmd.append("--network_train_unet_only")
-                print("[CONFIG-GEN] ✓ Flux.1 training text encoders (--network_train_unet_only=False)")
+                print("[CONFIG-GEN] ✓ Flux.1 training U-Net only (using networks.lora_flux)")
+            else:
+                print("[CONFIG-GEN] ✓ Flux.1 training U-Net + Text Encoders")
 
         # --- VRAM SAVING STRATEGY ---
         cmd.extend([
