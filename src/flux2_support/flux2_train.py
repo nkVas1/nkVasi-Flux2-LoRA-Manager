@@ -21,52 +21,109 @@ import sys
 import os
 import argparse
 
-# === КРИТИЧЕСКИ ВАЖНО: Добавить training_libs ДО всех импортов ===
-# Получаем путь к текущему файлу и идем вверх к корню проекта
-current_file = os.path.abspath(__file__)
-# flux2_train.py -> flux2_support -> src -> ComfyUI-Flux2-LoRA-Manager
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
-training_libs_path = os.path.join(project_root, "training_libs")
+# === ФАЗА 5: Устойчивый поиск training_libs ===
+# Проблема: при запуске через accelerate wrapper, __file__ может указывать на временную папку
+# Решение: используем многоуровневый поиск
 
-if os.path.exists(training_libs_path):
-    # Добавляем в НАЧАЛО sys.path, чтобы перебить все конфликты
-    sys.path.insert(0, training_libs_path)
-    print(f"[FLUX2_TRAIN] ✓ training_libs added: {training_libs_path}")
-else:
-    print(f"[FLUX2_TRAIN] ⚠ training_libs not found at: {training_libs_path}")
-    print("[FLUX2_TRAIN] Attempting fallback to system packages...")
-
-# Проверка imagesize ПОСЛЕ добавления training_libs
-try:
-    import imagesize
-    print(f"[FLUX2_TRAIN] ✓ imagesize found: {imagesize.__file__}")
-except ImportError:
-    print("[FLUX2_TRAIN] ⚠ imagesize module NOT found!")
-    print("[FLUX2_TRAIN] This will cause dataset loading to fail")
-
-# Парсим sd_scripts_dir
+# 1. Сначала парсим аргументы, чтобы узнать где лежат sd-scripts
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument("--sd_scripts_dir", type=str, default="")
 args, _ = parser.parse_known_args()
 
+print(f"[FLUX2] Current sys.path[0]: {sys.path[0]}")
+print(f"[FLUX2] Current working directory: {os.getcwd()}")
+
+# 2. Попытка 1: Ищем training_libs в существующих путях
+found_libs = False
+for p in sys.path:
+    if p.endswith("training_libs") and os.path.exists(p):
+        print(f"[FLUX2] ✓ Found training_libs in path: {p}")
+        # Перемещаем в начало для приоритета
+        sys.path.remove(p)
+        sys.path.insert(0, p)
+        found_libs = True
+        break
+
+if not found_libs:
+    # Попытка 2: Ищем относительно текущего рабочего каталога
+    # process.py устанавливает cwd, поэтому можем попробовать найти плагин отсюда
+    cwd = os.getcwd()
+    
+    # Вверху по дереву: обычно sd-scripts находится в custom_nodes или в kohya_ss
+    # Попытаемся подняться на несколько уровней вверх и найти ComfyUI-Flux2-LoRA-Manager
+    for levels_up in range(1, 6):
+        possible_root = os.path.join(cwd, *[".."] * levels_up, 
+                                     "custom_nodes", "ComfyUI-Flux2-LoRA-Manager", "training_libs")
+        possible_root = os.path.normpath(os.path.abspath(possible_root))
+        if os.path.exists(possible_root):
+            sys.path.insert(0, possible_root)
+            print(f"[FLUX2] ✓ Found training_libs via cwd relative path: {possible_root}")
+            found_libs = True
+            break
+    
+    if not found_libs and args.sd_scripts_dir:
+        # Попытка 3: Пытаемся вывести путь на основе sd_scripts_dir
+        # Обычно sd-scripts лежит в kohya_ss, который может быть в custom_nodes
+        # G:\ComfyUI\custom_nodes\kohya_ss\sd-scripts -> ищем custom_nodes
+        # или G:\ComfyUI\kohya_ss\sd-scripts -> ищем ComfyUI
+        
+        parts = args.sd_scripts_dir.split(os.sep)
+        
+        # Ищем индекс "custom_nodes" в пути
+        if "custom_nodes" in parts:
+            idx = parts.index("custom_nodes")
+            root = os.sep.join(parts[:idx+1])
+            libs = os.path.join(root, "ComfyUI-Flux2-LoRA-Manager", "training_libs")
+            if os.path.exists(libs):
+                sys.path.insert(0, libs)
+                print(f"[FLUX2] ✓ Found training_libs via sd_scripts deduction: {libs}")
+                found_libs = True
+        
+        # Попытка 3b: Если sd-scripts находится в kohya_ss рядом с плагином
+        if not found_libs:
+            # Ищем папку kohya_ss и предполагаем, что плагин рядом
+            if "kohya_ss" in parts or "sd-scripts" in parts:
+                # Попробуем найти корень ComfyUI
+                # G:\ComfyUI\custom_nodes\kohya_ss\sd-scripts или G:\ComfyUI\kohya_ss\sd-scripts
+                for i in range(len(parts)-1, -1, -1):
+                    if parts[i] in ["kohya_ss", "sd-scripts"]:
+                        # Поднимаемся выше kohya_ss/sd-scripts
+                        root = os.sep.join(parts[:i])
+                        libs = os.path.join(root, "custom_nodes", "ComfyUI-Flux2-LoRA-Manager", "training_libs")
+                        if os.path.exists(libs):
+                            sys.path.insert(0, libs)
+                            print(f"[FLUX2] ✓ Found training_libs via kohya_ss deduction: {libs}")
+                            found_libs = True
+                            break
+
+if not found_libs:
+    print("[FLUX2] ⚠ WARNING: Could not locate training_libs automatically.")
+    print("[FLUX2] This will likely cause 'imagesize' import to fail.")
+
+# 3. Добавляем sd-scripts (как и раньше)
 if args.sd_scripts_dir and os.path.exists(args.sd_scripts_dir):
-    print(f"[FLUX2_TRAIN] Setting up sd-scripts path: {args.sd_scripts_dir}")
-    # Добавляем sd-scripts в конец (после training_libs)
     if args.sd_scripts_dir not in sys.path:
         sys.path.append(args.sd_scripts_dir)
-    library_path = os.path.join(args.sd_scripts_dir, "library")
-    if os.path.exists(library_path) and library_path not in sys.path:
-        sys.path.append(library_path)
-else:
-    print("[FLUX2_TRAIN] WARNING: --sd_scripts_dir not provided")
+    lib_path = os.path.join(args.sd_scripts_dir, "library")
+    if lib_path not in sys.path:
+        sys.path.append(lib_path)
+    print(f"[FLUX2] Added sd-scripts: {args.sd_scripts_dir}")
 
-# Теперь можно импортировать библиотеки
+# 4. Проверка imagesize (диагностика)
+try:
+    import imagesize
+    print(f"[FLUX2] ✓ imagesize imported successfully: {imagesize.__file__}")
+except ImportError as e:
+    print(f"[FLUX2] ❌ ERROR: imagesize not found. Check sys.path or install in training_libs!")
+    print(f"[FLUX2] Error details: {e}")
+
+# === Остальные импорты ===
 import logging
 import torch
 try:
     from library import train_util, flux_train_utils
     import library.flux_train_network as base_trainer
-    print("[FLUX2_TRAIN] ✓ All imports successful")
+    print("[FLUX2_TRAIN] ✓ All sd-scripts imports successful")
 except ImportError as e:
     print(f"[FLUX2_TRAIN] CRITICAL IMPORT ERROR: {e}")
     print("[FLUX2_TRAIN] Ensure --sd_scripts_dir is correct in the Configurator node")
@@ -74,10 +131,10 @@ except ImportError as e:
 
 # Импортируем наши модули Flux.2
 try:
-    # Относительный импорт может не работать, используем абсолютный путь
-    flux2_support_dir = os.path.dirname(current_file)
+    # Ищем flux2_support папку
+    flux2_support_dir = os.path.dirname(os.path.abspath(__file__))
     if flux2_support_dir not in sys.path:
-        sys.path.insert(0, flux2_support_dir)
+        sys.path.insert(1, flux2_support_dir)
     
     import flux2_utils
     import flux2_models
