@@ -262,6 +262,7 @@ class TrainingProcessManager:
             # Convert paths to forward slashes to avoid escape sequence issues
             script_dir_forward = script_dir_abs.replace('\\', '/')
             plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            plugin_dir_forward = plugin_dir.replace('\\', '/')
             plugin_src_forward = os.path.join(plugin_dir, 'src').replace('\\', '/')
             original_script_forward = original_script_path.replace('\\', '/')
             
@@ -287,8 +288,7 @@ else:
     print("[WRAPPER] ⚠ Blockers installed but verification failed")
 
 # === Setup paths ===
-training_libs = r"{script_dir_abs}".replace("\\\\", "/") + "/../../../custom_nodes/ComfyUI-Flux2-LoRA-Manager/training_libs"
-training_libs = os.path.normpath(training_libs)
+training_libs = os.path.normpath(r"{plugin_dir_forward}/training_libs")
 
 if os.path.exists(training_libs):
     sys.path.insert(0, training_libs)
@@ -316,6 +316,23 @@ except Exception as e:
     import traceback
     traceback.print_exc()
     sys.exit(1)
+
+# === Compatibility patch for Flux trainer ===
+# flux_train_network.py expects LoRANetwork.train_t5xxl to exist
+try:
+    if os.path.basename(r"{original_script_forward}") == "flux_train_network.py":
+        import importlib
+        lora_mod = importlib.import_module("networks.lora")
+        if hasattr(lora_mod, "LoRANetwork"):
+            if not hasattr(lora_mod.LoRANetwork, "train_t5xxl"):
+                lora_mod.LoRANetwork.train_t5xxl = False
+                print("[WRAPPER] ✓ Patched LoRANetwork.train_t5xxl=False")
+            # на всякий случай (в разных ветках sd-scripts могут быть разные флаги)
+            if not hasattr(lora_mod.LoRANetwork, "train_clip_l"):
+                lora_mod.LoRANetwork.train_clip_l = False
+                print("[WRAPPER] ✓ Patched LoRANetwork.train_clip_l=False")
+except Exception as e:
+    print(f"[WRAPPER] ⚠ Flux compatibility patch failed: {{e}}")
 
 # === Execute training script ===
 try:
